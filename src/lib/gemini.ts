@@ -1,63 +1,39 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { TestResult } from "@/types";
+import type { TestResult } from "@/types";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+const GEMINI_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
-// Use stable model — gemini-2.0-flash-exp was deprecated
-const MODEL = "gemini-2.0-flash";
+async function callGemini(prompt: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set in environment");
 
-export async function generateAIInsights(result: TestResult): Promise<string> {
-  try {
-    const model = genAI.getGenerativeModel({ model: MODEL });
+  const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
+    }),
+  });
 
-    const prompt = `
-You are a friendly and encouraging AI tutor for a student who just completed a mock exam.
-
-Exam: ${result.exam_name}
-Score: ${result.score}/${result.total_marks} (${result.accuracy}% accuracy)
-Percentile: ${result.percentile}th percentile
-Correct Answers: ${result.correct_answers}
-Wrong Answers: ${result.wrong_answers}
-Skipped: ${result.skipped_answers}
-Time Taken: ${Math.floor(result.time_taken_seconds / 60)} minutes
-
-Section-wise Performance:
-${result.section_scores.map((s) => `- ${s.section}: ${s.correct}/${s.total} correct (${Math.round((s.correct / s.total) * 100)}%)`).join("\n")}
-
-Please provide:
-1. A warm, encouraging opening (1-2 sentences)
-2. Key strengths observed (2-3 bullet points)
-3. Areas that need improvement (2-3 bullet points)
-4. Specific, actionable study tips (2-3 bullet points)
-5. A motivating closing statement
-
-Keep it concise, friendly, and student-focused. Use simple language. Format with clear sections using **bold** headers.
-    `.trim();
-
-    const result_ai = await model.generateContent(prompt);
-    const response = await result_ai.response;
-    return response.text();
-  } catch (err) {
-    console.error("[Gemini] generateAIInsights failed:", err);
-    return `Great effort on completing the exam! You scored ${result.accuracy}% accuracy.
-
-**Strengths:** You showed persistence by completing the full exam. Your correct answers demonstrate solid foundational knowledge.
-
-**Areas to Improve:** Focus on the sections where you had more incorrect answers. Review the explanations for questions you missed.
-
-**Study Tips:**
-• Review incorrect answers with explanations
-• Practice time management — aim for consistent pacing
-• Focus extra study time on your weaker sections
-
-Keep up the practice and you'll see significant improvement! Every attempt makes you stronger.`;
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      `Gemini HTTP ${res.status}: ${err?.error?.message ?? res.statusText}`
+    );
   }
+
+  const data = await res.json();
+  const text: string | undefined =
+    data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!text) throw new Error("Gemini returned empty response");
+  return text.trim();
 }
 
-// Throws on failure — callers decide whether to use fallback
 export async function generateMockQuestions(
   examName: string,
-  totalQuestions: number = 30
+  totalQuestions = 30
 ): Promise<
   Array<{
     question_text: string;
@@ -67,12 +43,10 @@ export async function generateMockQuestions(
     section: string;
   }>
 > {
-  const model = genAI.getGenerativeModel({ model: MODEL });
-
   const prompt = `
 Generate ${totalQuestions} multiple-choice questions for a "${examName}" mock exam.
 
-Return ONLY a valid JSON array — no markdown fences, no extra text before or after:
+Return ONLY a valid JSON array — no markdown fences, no explanation, no text outside the array:
 [
   {
     "question_text": "Full question text here?",
@@ -89,29 +63,81 @@ Return ONLY a valid JSON array — no markdown fences, no extra text before or a
 ]
 
 Requirements:
-- Questions must be realistic and specific to ${examName}
+- Questions must be realistic and specific to "${examName}"
 - Cover at least 3 different sections/topics
 - Mix easy, medium, and hard difficulty
 - correct_answer must be exactly one of: "A", "B", "C", "D"
-  `.trim();
+`.trim();
 
-  const result = await model.generateContent(prompt);
-  const text = result.response.text().trim();
+  const text = await callGemini(prompt);
 
-  // Strip any markdown code fences Gemini might add despite instructions
-  const clean = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  // Strip any markdown fences the model might add despite instructions
+  const clean = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+
   const jsonStart = clean.indexOf("[");
   const jsonEnd = clean.lastIndexOf("]") + 1;
-
   if (jsonStart === -1 || jsonEnd === 0) {
-    throw new Error(`Gemini returned non-JSON response: ${clean.slice(0, 200)}`);
+    throw new Error(`Non-JSON response from Gemini: ${clean.slice(0, 300)}`);
   }
 
   const parsed = JSON.parse(clean.slice(jsonStart, jsonEnd));
-
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("Gemini returned empty question array");
   }
 
   return parsed;
+}
+
+export async function generateAIInsights(result: TestResult): Promise<string> {
+  const prompt = `
+You are a friendly and encouraging AI tutor for a student who just completed a mock exam.
+
+Exam: ${result.exam_name}
+Score: ${result.score}/${result.total_marks} (${result.accuracy}% accuracy)
+Percentile: ${result.percentile}th percentile
+Correct: ${result.correct_answers} | Wrong: ${result.wrong_answers} | Skipped: ${result.skipped_answers}
+Time: ${Math.floor(result.time_taken_seconds / 60)} minutes
+
+Section Performance:
+${result.section_scores
+  .map(
+    (s) =>
+      `- ${s.section}: ${s.correct}/${s.total} correct (${Math.round((s.correct / s.total) * 100)}%)`
+  )
+  .join("\n")}
+
+Provide:
+1. A warm, encouraging opening (1-2 sentences)
+2. **Key Strengths:** (2-3 bullet points starting with •)
+3. **Areas to Improve:** (2-3 bullet points starting with •)
+4. **Study Tips:** (2-3 bullet points starting with •)
+5. A motivating closing sentence
+
+Keep it concise and student-friendly.
+`.trim();
+
+  try {
+    return await callGemini(prompt);
+  } catch (err) {
+    console.error("[Gemini] generateAIInsights failed:", err);
+    return `Great effort on completing the exam! You scored ${result.accuracy}% accuracy.
+
+**Key Strengths:**
+• You completed the full exam — that takes real discipline
+• Your correct answers show solid foundational knowledge
+
+**Areas to Improve:**
+• Review sections where you had incorrect answers
+• Focus extra study time on weaker topics
+
+**Study Tips:**
+• Review wrong answers with explanations after every test
+• Practice one full mock test per week to build stamina
+• Use spaced repetition for topics you consistently miss
+
+Keep practicing and you'll see significant improvement!`;
+  }
 }
