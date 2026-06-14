@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, use } from "react";
 import { motion } from "framer-motion";
 import {
   RadialBarChart,
@@ -144,8 +144,8 @@ function InsightText({ text }: { text: string }) {
   );
 }
 
-export default function ResultsPage({ params }: { params: { id: string } }) {
-  const resultId = params.id;
+export default function ResultsPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id: resultId } = use(params);
 
   const [result, setResult] = useState<ResultData | null>(null);
   const [loading, setLoading] = useState(true);

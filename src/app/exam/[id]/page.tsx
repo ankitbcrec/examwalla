@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, use } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Clock,
@@ -139,9 +139,9 @@ function SubmitModal({ unanswered, onReview, onSubmit, onClose, submitting }: Su
   );
 }
 
-export default function ExamPage({ params }: { params: { id: string } }) {
+export default function ExamPage({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
-  const examId = params.id;
+  const { id: examId } = use(params);
   const examName = EXAM_NAMES[examId] ?? examId.replace(/-/g, " ").toUpperCase();
 
   const [questions, setQuestions] = useState<Question[]>([]);
