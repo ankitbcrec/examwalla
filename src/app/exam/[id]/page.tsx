@@ -127,7 +127,10 @@ function SubmitModal({ unanswered, onReview, onSubmit, onClose, submitting }: Su
 export default function ExamPage({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
   const { id: examId } = use(params);
-  const examName = EXAM_NAMES[examId] ?? examId.replace(/-/g, " ").toUpperCase();
+  const storedName = typeof window !== "undefined"
+    ? (sessionStorage.getItem(`exam_name_${examId}`) ?? "")
+    : "";
+  const examName = EXAM_NAMES[examId] ?? (storedName || examId.replace(/-/g, " ").toUpperCase());
 
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);

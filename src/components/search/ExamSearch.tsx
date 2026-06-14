@@ -2,9 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { logEvent } from "@/lib/event-logger";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, X, ArrowRight, TrendingUp, Clock } from "lucide-react";
+import { Search, X, ArrowRight, TrendingUp, Clock, Sparkles, Loader2 } from "lucide-react";
 import {
   searchExams,
   POPULAR_EXAMS,
@@ -12,10 +11,26 @@ import {
   type ExamEntry,
 } from "@/lib/exam-catalog";
 import { cn } from "@/lib/utils";
+import { logEvent } from "@/lib/event-logger";
+import type { ExamSuggestion } from "@/app/api/search-suggest/route";
 
 interface ExamSearchProps {
   open: boolean;
   onClose: () => void;
+}
+
+// Convert an AI suggestion into the shape ResultRow expects
+function suggestionToEntry(s: ExamSuggestion): ExamEntry {
+  return {
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    category: (s.category as ExamEntry["category"]) ?? "Other",
+    emoji: s.emoji ?? "📝",
+    difficulty: "Moderate",
+    popular: false,
+    tags: [],
+  };
 }
 
 export default function ExamSearch({ open, onClose }: ExamSearchProps) {
@@ -25,9 +40,25 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
   const [activeIdx, setActiveIdx] = useState(0);
   const [recent, setRecent] = useState<ExamEntry[]>([]);
 
-  const results = query.trim() ? searchExams(query) : POPULAR_EXAMS;
+  // AI suggestion state
+  const [aiSuggestions, setAiSuggestions] = useState<ExamEntry[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiSearched, setAiSearched] = useState(false); // true once we got a response for current query
 
-  // Load recent searches from localStorage
+  const staticResults = query.trim() ? searchExams(query) : POPULAR_EXAMS;
+
+  // Show static results first; fall back to AI results when static are thin
+  const useAI = query.trim().length >= 3 && staticResults.length < 4;
+  const results: Array<ExamEntry & { _ai?: boolean }> = useAI && aiSuggestions.length > 0
+    ? [
+        ...staticResults,
+        ...aiSuggestions
+          .filter((a) => !staticResults.some((s) => s.id === a.id))
+          .map((a) => ({ ...a, _ai: true })),
+      ]
+    : staticResults;
+
+  // Load recent searches
   useEffect(() => {
     if (open) {
       try {
@@ -38,23 +69,28 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
     } else {
       setQuery("");
       setActiveIdx(0);
+      setAiSuggestions([]);
+      setAiLoading(false);
+      setAiSearched(false);
     }
   }, [open]);
 
   // Close on ESC
   useEffect(() => {
     if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
-  // Reset active index when results change
-  useEffect(() => setActiveIdx(0), [query]);
+  // Reset active index and AI state when query changes
+  useEffect(() => {
+    setActiveIdx(0);
+    setAiSuggestions([]);
+    setAiSearched(false);
+  }, [query]);
 
-  // Log search_performed 800 ms after the user stops typing
+  // Log search intent (800ms debounce)
   useEffect(() => {
     if (!query.trim()) return;
     const t = setTimeout(() => {
@@ -66,9 +102,29 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
     return () => clearTimeout(t);
   }, [query, results.length]);
 
+  // AI fallback — fires 600ms after typing stops, only when static results are thin
+  useEffect(() => {
+    if (!useAI || aiSearched) return;
+    const t = setTimeout(async () => {
+      setAiLoading(true);
+      try {
+        const res = await fetch(`/api/search-suggest?q=${encodeURIComponent(query.trim())}`);
+        if (res.ok) {
+          const { suggestions } = await res.json();
+          setAiSuggestions(suggestions.map(suggestionToEntry));
+        }
+      } catch {
+        // silent — static results remain visible
+      } finally {
+        setAiLoading(false);
+        setAiSearched(true);
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [query, useAI, aiSearched]);
+
   const navigate = useCallback(
-    (exam: ExamEntry) => {
-      // Save to recent
+    (exam: ExamEntry & { _ai?: boolean }) => {
       try {
         const prev: ExamEntry[] = JSON.parse(
           localStorage.getItem("ew_recent_searches") ?? "[]"
@@ -76,11 +132,21 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
         const deduped = [exam, ...prev.filter((e) => e.id !== exam.id)].slice(0, 5);
         localStorage.setItem("ew_recent_searches", JSON.stringify(deduped));
       } catch {}
+
+      // Store the full name so the exam page can use it for Gemini
+      if (exam._ai) {
+        try {
+          sessionStorage.setItem(`exam_name_${exam.id}`, exam.name);
+        } catch {}
+      }
+
       logEvent("exam_selected", exam.id, {
         exam_name: exam.name,
         category: exam.category,
         query: query.trim() || null,
+        source: exam._ai ? "ai" : "catalog",
       });
+
       onClose();
       router.push(`/exam/${exam.id}`);
     },
@@ -109,7 +175,6 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
     <AnimatePresence>
       {open && (
         <>
-          {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -119,7 +184,6 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
             className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
           />
 
-          {/* Panel */}
           <div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] px-4 pointer-events-none">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: -12 }}
@@ -128,14 +192,17 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
               transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
               className="pointer-events-auto w-full max-w-xl bg-card border border-border/60 rounded-2xl shadow-2xl overflow-hidden"
             >
-              {/* Search input row */}
+              {/* Search input */}
               <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60">
-                <Search className="w-5 h-5 text-muted-foreground shrink-0" />
+                {aiLoading
+                  ? <Loader2 className="w-5 h-5 text-primary shrink-0 animate-spin" />
+                  : <Search className="w-5 h-5 text-muted-foreground shrink-0" />
+                }
                 <input
                   ref={inputRef}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search exams — SSC, NEET, CAT, IELTS..."
+                  placeholder="Search any exam — nursing, JEE, barista, AWS…"
                   className="flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground outline-none"
                 />
                 {query && (
@@ -151,20 +218,14 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
                 </kbd>
               </div>
 
-              {/* Recent searches (only when no query) */}
+              {/* Recent searches */}
               {!query && recent.length > 0 && (
                 <div className="px-3 pt-3">
                   <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-1 flex items-center gap-1.5">
-                    <Clock className="w-3 h-3" />
-                    Recent
+                    <Clock className="w-3 h-3" /> Recent
                   </p>
                   {recent.map((exam) => (
-                    <ResultRow
-                      key={exam.id}
-                      exam={exam}
-                      active={false}
-                      onClick={() => navigate(exam)}
-                    />
+                    <ResultRow key={exam.id} exam={exam} active={false} onClick={() => navigate(exam)} />
                   ))}
                   <div className="h-px bg-border/60 mx-2 my-2" />
                 </div>
@@ -174,16 +235,35 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
               <div className="px-3 py-2 max-h-[58vh] overflow-y-auto">
                 {!query && (
                   <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-1 flex items-center gap-1.5">
-                    <TrendingUp className="w-3 h-3" />
-                    Popular Exams
+                    <TrendingUp className="w-3 h-3" /> Popular Exams
                   </p>
                 )}
 
-                {results.length === 0 ? (
+                {/* AI section header — only shown when AI results are mixed in */}
+                {query && useAI && aiSuggestions.length > 0 && staticResults.length > 0 && (
+                  <p className="text-[11px] font-semibold text-violet-500 uppercase tracking-wider px-2 mt-3 mb-1 flex items-center gap-1.5">
+                    <Sparkles className="w-3 h-3" /> AI Suggestions
+                  </p>
+                )}
+                {query && useAI && aiSuggestions.length > 0 && staticResults.length === 0 && (
+                  <p className="text-[11px] font-semibold text-violet-500 uppercase tracking-wider px-2 mb-1 flex items-center gap-1.5">
+                    <Sparkles className="w-3 h-3" /> AI found these exams for you
+                  </p>
+                )}
+
+                {/* Loading skeleton while AI thinks */}
+                {aiLoading && staticResults.length < 4 && (
+                  <div className="px-3 py-3 flex items-center gap-3 text-muted-foreground text-sm">
+                    <Sparkles className="w-4 h-4 text-violet-400 shrink-0" />
+                    <span>Searching with AI…</span>
+                  </div>
+                )}
+
+                {results.length === 0 && !aiLoading ? (
                   <div className="py-10 text-center text-muted-foreground">
                     <Search className="w-8 h-8 mx-auto mb-3 opacity-30" />
                     <p className="text-sm">No exams found for &quot;{query}&quot;</p>
-                    <p className="text-xs mt-1">Try: SSC, NEET, JEE, IBPS, CAT, IELTS…</p>
+                    <p className="text-xs mt-1 opacity-60">Try a different keyword…</p>
                   </div>
                 ) : (
                   results.map((exam, i) => (
@@ -194,14 +274,14 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
                       onClick={() => navigate(exam)}
                       onHover={() => setActiveIdx(i)}
                       query={query}
+                      isAI={!!(exam as ExamEntry & { _ai?: boolean })._ai}
                     />
                   ))
                 )}
 
                 {results.length > 0 && (
                   <p className="text-center text-[11px] text-muted-foreground py-2 mt-1 border-t border-border/40">
-                    {results.length} result{results.length !== 1 ? "s" : ""} ·
-                    Use ↑ ↓ to navigate · Enter to start test
+                    {results.length} result{results.length !== 1 ? "s" : ""} · ↑↓ navigate · Enter to start
                   </p>
                 )}
               </div>
@@ -234,14 +314,16 @@ function ResultRow({
   onClick,
   onHover,
   query = "",
+  isAI = false,
 }: {
   exam: ExamEntry;
   active: boolean;
   onClick: () => void;
   onHover?: () => void;
   query?: string;
+  isAI?: boolean;
 }) {
-  const meta = CATEGORY_META[exam.category];
+  const meta = CATEGORY_META[exam.category] ?? { bg: "bg-muted", color: "text-muted-foreground" };
 
   return (
     <button
@@ -252,50 +334,39 @@ function ResultRow({
         active ? "bg-primary/8 text-foreground" : "hover:bg-accent"
       )}
     >
-      {/* Emoji */}
       <span className="text-xl w-8 text-center shrink-0">{exam.emoji}</span>
 
-      {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-foreground truncate">
             {highlight(exam.name, query)}
           </span>
-          <span
-            className={cn(
-              "text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0",
-              meta.bg,
-              meta.color
-            )}
-          >
+          <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0", meta.bg, meta.color)}>
             {exam.category}
           </span>
-          <span
-            className={cn(
+          {isAI ? (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-md shrink-0 ml-auto bg-violet-50 text-violet-600 dark:bg-violet-950/40 flex items-center gap-0.5">
+              <Sparkles className="w-2.5 h-2.5" /> AI
+            </span>
+          ) : (
+            <span className={cn(
               "text-[10px] px-1.5 py-0.5 rounded-md shrink-0 ml-auto",
               exam.difficulty === "Easy" && "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40",
               exam.difficulty === "Moderate" && "bg-amber-50 text-amber-600 dark:bg-amber-950/40",
               exam.difficulty === "Hard" && "bg-red-50 text-red-600 dark:bg-red-950/40",
               exam.difficulty === "Very Hard" && "bg-red-100 text-red-700 dark:bg-red-950/60"
-            )}
-          >
-            {exam.difficulty}
-          </span>
+            )}>
+              {exam.difficulty}
+            </span>
+          )}
         </div>
-        <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {exam.description}
-        </p>
+        <p className="text-xs text-muted-foreground truncate mt-0.5">{exam.description}</p>
       </div>
 
-      {/* Arrow */}
-      <ArrowRight
-        className={cn(
-          "w-4 h-4 shrink-0 transition-all",
-          active
-            ? "text-primary opacity-100 translate-x-0"
-            : "text-muted-foreground opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0"
-        )}
-      />
+      <ArrowRight className={cn(
+        "w-4 h-4 shrink-0 transition-all",
+        active ? "text-primary opacity-100 translate-x-0" : "text-muted-foreground opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0"
+      )} />
     </button>
   );
 }
