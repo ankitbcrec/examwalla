@@ -12,7 +12,7 @@ async function callGemini(prompt: string): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
+      generationConfig: { temperature: 0.7 },
     }),
   });
 
@@ -33,7 +33,7 @@ async function callGemini(prompt: string): Promise<string> {
 
 export async function generateMockQuestions(
   examName: string,
-  totalQuestions = 30
+  totalQuestions = 20
 ): Promise<
   Array<{
     question_text: string;

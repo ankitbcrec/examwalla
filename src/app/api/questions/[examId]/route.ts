@@ -59,7 +59,7 @@ export async function GET(
   const examName = EXAM_NAMES[examId] ?? examId.replace(/-/g, " ").toUpperCase();
   let questions;
   try {
-    questions = await generateMockQuestions(examName, 30);
+    questions = await generateMockQuestions(examName, 20);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[questions/${examId}] Gemini failed:`, msg);
