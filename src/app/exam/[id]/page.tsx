@@ -14,6 +14,7 @@ import {
   GraduationCap,
   Maximize2,
   Minimize2,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,55 +23,16 @@ import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import type { Question, QuestionStatus } from "@/types";
 
-// Mock questions
-const generateQuestions = (examId: string): Question[] =>
-  Array.from({ length: 30 }, (_, i) => ({
-    id: `q${i + 1}`,
-    exam_id: examId,
-    question_number: i + 1,
-    question_text: getSampleQuestion(i),
-    options: [
-      { key: "A", text: getOption(i, 0) },
-      { key: "B", text: getOption(i, 1) },
-      { key: "C", text: getOption(i, 2) },
-      { key: "D", text: getOption(i, 3) },
-    ],
-    correct_answer: ["A", "B", "C", "D"][Math.floor(Math.random() * 4)],
-    section: i < 10 ? "Section A" : i < 20 ? "Section B" : "Section C",
-    marks: 1,
-  }));
-
-function getSampleQuestion(i: number) {
-  const questions = [
-    "Which of the following is NOT a function of SEBI in regulating securities markets?",
-    "A company's Price-to-Earnings (P/E) ratio is 20 and its EPS is ₹15. What is the market price of the share?",
-    "Under the NISM Research Analyst Regulations, an analyst must disclose financial interest if it exceeds:",
-    "Which ratio best measures a company's ability to pay short-term obligations?",
-    "What is the primary difference between a futures contract and an options contract?",
-    "In Discounted Cash Flow (DCF) analysis, what does WACC stand for?",
-    "Which of the following is considered a 'safe harbor' provision for research analysts?",
-    "The beta coefficient of a stock measures its sensitivity to:",
-    "What is the standard settlement cycle for equity trades in Indian stock markets?",
-    "A bond with a coupon rate higher than its YTM is trading at:",
-  ];
-  return questions[i % questions.length];
-}
-
-function getOption(i: number, opt: number) {
-  const options = [
-    ["Setting monetary policy", "Regulating stock exchanges", "Registering brokers", "Protecting investor interests"],
-    ["₹200", "₹300", "₹150", "₹250"],
-    ["1% of portfolio", "2% of portfolio", "5% of portfolio", "No disclosure needed"],
-    ["Debt-to-equity ratio", "Current ratio", "Return on equity", "Gross margin"],
-    ["Obligation vs right", "Both are obligations", "Both are rights", "No difference"],
-    ["Weighted Average Cost of Capital", "Working Capital Cost", "Weighted Asset Cost Calculation", "Working Average Capital Cost"],
-    ["Preparing research reports", "Trading on insider information", "Publishing recommendations", "Client communications"],
-    ["Market risk", "Credit risk", "Liquidity risk", "Operational risk"],
-    ["T+1", "T+2", "T+3", "T+0"],
-    ["Premium", "Discount", "Par value", "Face value"],
-  ];
-  return options[i % options.length][opt];
-}
+const EXAM_NAMES: Record<string, string> = {
+  "nism-xv": "NISM Series XV",
+  "nism-viii": "NISM Series VIII",
+  "aws-saa": "AWS Solutions Architect",
+  "java-cert": "Java OCP Certification",
+  "python-cert": "Python Certification",
+  "upsc-prelims": "UPSC Prelims",
+  "ssc-cgl": "SSC CGL",
+  "bank-po": "Bank PO – IBPS",
+};
 
 const paletteColors: Record<QuestionStatus, { bg: string; text: string; label: string }> = {
   not_visited: { bg: "bg-muted hover:bg-muted/80", text: "text-muted-foreground", label: "Not Visited" },
@@ -88,14 +50,33 @@ function formatTime(s: number) {
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
+function LoadingScreen({ examName }: { examName: string }) {
+  return (
+    <div className="flex flex-col h-screen items-center justify-center bg-background gap-6">
+      <div className="w-14 h-14 rounded-2xl gradient-primary flex items-center justify-center">
+        <GraduationCap className="w-7 h-7 text-white" />
+      </div>
+      <div className="text-center">
+        <h2 className="text-xl font-bold text-foreground mb-2">{examName}</h2>
+        <p className="text-muted-foreground text-sm mb-6">Preparing your AI-generated questions...</p>
+        <div className="flex items-center gap-2 justify-center text-primary">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span className="text-sm font-medium">Generating with Gemini AI</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface SubmitModalProps {
   unanswered: number;
   onReview: () => void;
   onSubmit: () => void;
   onClose: () => void;
+  submitting: boolean;
 }
 
-function SubmitModal({ unanswered, onReview, onSubmit, onClose }: SubmitModalProps) {
+function SubmitModal({ unanswered, onReview, onSubmit, onClose, submitting }: SubmitModalProps) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -108,7 +89,7 @@ function SubmitModal({ unanswered, onReview, onSubmit, onClose }: SubmitModalPro
         animate={{ scale: 1, y: 0, opacity: 1 }}
         exit={{ scale: 0.85, y: 20, opacity: 0 }}
         transition={{ type: "spring", damping: 25 }}
-        className="bg-card rounded-3xl shadow-2xl w-full max-w-sm border border-border/60 p-7 text-center"
+        className="relative bg-card rounded-3xl shadow-2xl w-full max-w-sm border border-border/60 p-7 text-center"
       >
         <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/40 flex items-center justify-center mx-auto mb-5">
           <AlertCircle className="w-8 h-8 text-amber-500" />
@@ -131,20 +112,24 @@ function SubmitModal({ unanswered, onReview, onSubmit, onClose }: SubmitModalPro
           <Button
             variant="outline"
             onClick={onReview}
+            disabled={submitting}
             className="rounded-2xl font-semibold"
           >
             Review
           </Button>
           <Button
             onClick={onSubmit}
-            className="rounded-2xl gradient-primary border-0 text-white font-bold"
+            disabled={submitting}
+            className="rounded-2xl gradient-primary border-0 text-white font-bold gap-2"
           >
-            Final Submit
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+            {submitting ? "Saving..." : "Final Submit"}
           </Button>
         </div>
 
         <button
           onClick={onClose}
+          disabled={submitting}
           className="absolute top-4 right-4 w-8 h-8 rounded-xl bg-muted hover:bg-muted/80 flex items-center justify-center"
         >
           <X className="w-4 h-4" />
@@ -156,16 +141,58 @@ function SubmitModal({ unanswered, onReview, onSubmit, onClose }: SubmitModalPro
 
 export default function ExamPage({ params }: { params: { id: string } }) {
   const router = useRouter();
-  const [questions] = useState<Question[]>(() => generateQuestions(params.id));
+  const examId = params.id;
+  const examName = EXAM_NAMES[examId] ?? examId.replace(/-/g, " ").toUpperCase();
+
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answers, setAnswers] = useState<Record<number, string>>({});
-  const [statuses, setStatuses] = useState<Record<number, QuestionStatus>>(() =>
-    Object.fromEntries(questions.map((_, i) => [i, "not_visited" as QuestionStatus]))
-  );
+  const [statuses, setStatuses] = useState<Record<number, QuestionStatus>>({});
   const [timeLeft, setTimeLeft] = useState(120 * 60);
   const [showSubmit, setShowSubmit] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const startTime = useRef(Date.now());
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Fetch questions from API (Gemini-generated, cached in Supabase)
+  useEffect(() => {
+    fetch(`/api/questions/${examId}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(({ questions: raw }) => {
+        const mapped: Question[] = raw.map(
+          (q: {
+            question_text: string;
+            options: { key: string; text: string }[];
+            correct_answer: string;
+            explanation?: string;
+            section?: string;
+          }, i: number) => ({
+            id: `q${i + 1}`,
+            exam_id: examId,
+            question_number: i + 1,
+            question_text: q.question_text,
+            options: q.options,
+            correct_answer: q.correct_answer,
+            explanation: q.explanation,
+            section: q.section ?? `Section ${Math.floor(i / 10) + 1}`,
+            marks: 1,
+          })
+        );
+        setQuestions(mapped);
+        setStatuses(
+          Object.fromEntries(mapped.map((_, i) => [i, "not_visited" as QuestionStatus]))
+        );
+        startTime.current = Date.now();
+      })
+      .catch((e) => setLoadError(e.message))
+      .finally(() => setLoading(false));
+  }, [examId]);
 
   const currentQ = questions[currentIdx];
   const answeredCount = Object.values(answers).filter(Boolean).length;
@@ -176,28 +203,30 @@ export default function ExamPage({ params }: { params: { id: string } }) {
 
   // Mark current as "not_answered" when first visited
   useEffect(() => {
+    if (questions.length === 0) return;
     setStatuses((prev) => {
       if (prev[currentIdx] === "not_visited") {
         return { ...prev, [currentIdx]: "not_answered" };
       }
       return prev;
     });
-  }, [currentIdx]);
+  }, [currentIdx, questions.length]);
 
-  // Timer countdown
+  // Timer countdown — start only after questions loaded
   useEffect(() => {
-    const interval = setInterval(() => {
+    if (loading || questions.length === 0) return;
+    timerRef.current = setInterval(() => {
       setTimeLeft((t) => {
         if (t <= 1) {
-          clearInterval(interval);
-          handleSubmit();
+          clearInterval(timerRef.current!);
+          doSubmit();
           return 0;
         }
         return t - 1;
       });
     }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => clearInterval(timerRef.current!);
+  }, [loading, questions.length]);
 
   const selectAnswer = (key: string) => {
     setAnswers((prev) => ({ ...prev, [currentIdx]: key }));
@@ -231,38 +260,100 @@ export default function ExamPage({ params }: { params: { id: string } }) {
     if (currentIdx < questions.length - 1) setCurrentIdx((i) => i + 1);
   };
 
-  const handleSubmit = useCallback(() => {
-    const timeTaken = Math.floor((Date.now() - startTime.current) / 1000);
-    const answeredAnswers = { ...answers };
-    const correct = questions.filter(
-      (q, i) => answeredAnswers[i] === q.correct_answer
-    ).length;
-    const wrong = Object.keys(answeredAnswers).length - correct;
-    const score = Math.max(0, correct - wrong * 0.25);
+  const doSubmit = useCallback(async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    clearInterval(timerRef.current!);
 
-    const resultData = {
-      exam_id: params.id,
+    const timeTaken = Math.floor((Date.now() - startTime.current) / 1000);
+    const correct = questions.filter((q, i) => answers[i] === q.correct_answer).length;
+    const wrong = Object.keys(answers).length - correct;
+    const score = Math.max(0, correct - wrong * 0.25);
+    const accuracy = questions.length > 0 ? Math.round((correct / questions.length) * 100) : 0;
+
+    // Derive section breakdown
+    const sections = [...new Set(questions.map((q) => q.section ?? "General"))];
+    const sectionScores = sections.map((sec) => {
+      const qs = questions.filter((q) => q.section === sec);
+      const secCorrect = qs.filter((q, qi) => {
+        const globalIdx = questions.indexOf(q);
+        return answers[globalIdx] === q.correct_answer;
+      }).length;
+      const secWrong = qs.filter((q) => {
+        const globalIdx = questions.indexOf(q);
+        return answers[globalIdx] && answers[globalIdx] !== q.correct_answer;
+      }).length;
+      return {
+        section: sec ?? "General",
+        correct: secCorrect,
+        wrong: secWrong,
+        total: qs.length,
+        score: secCorrect,
+        max_score: qs.length,
+      };
+    });
+
+    const payload = {
+      exam_id: examId,
+      exam_name: examName,
       score: Math.round(score),
       total_marks: questions.length,
       correct,
       wrong,
-      skipped: questions.length - Object.keys(answeredAnswers).length,
+      skipped: questions.length - Object.keys(answers).length,
       time_taken: timeTaken,
-      accuracy: Math.round((correct / questions.length) * 100),
-      percentile: Math.round(40 + Math.random() * 50),
+      accuracy,
+      section_scores: sectionScores,
     };
 
-    sessionStorage.setItem("last_result", JSON.stringify(resultData));
-    router.push(`/results/${params.id}`);
-  }, [answers, questions, params.id, router]);
+    // Store in sessionStorage as fallback
+    sessionStorage.setItem("last_result", JSON.stringify(payload));
+
+    try {
+      const res = await fetch("/api/results", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const { id } = await res.json();
+        router.push(`/results/${id}`);
+      } else {
+        // Fall back to examId-based route if save fails
+        router.push(`/results/${examId}`);
+      }
+    } catch {
+      router.push(`/results/${examId}`);
+    }
+  }, [answers, questions, examId, examName, router, submitting]);
+
+  const handleSubmit = () => doSubmit();
 
   const timerWarning = timeLeft < 300;
+
+  if (loading) return <LoadingScreen examName={examName} />;
+
+  if (loadError || questions.length === 0) {
+    return (
+      <div className="flex flex-col h-screen items-center justify-center gap-4 bg-background">
+        <AlertCircle className="w-12 h-12 text-red-500" />
+        <p className="text-foreground font-semibold">
+          {loadError ? `Failed to load questions: ${loadError}` : "No questions found."}
+        </p>
+        <Button onClick={() => router.back()} className="rounded-xl gradient-primary border-0 text-white">
+          Go Back
+        </Button>
+      </div>
+    );
+  }
+
+  // Unique sections from questions
+  const sections = [...new Set(questions.map((q) => q.section ?? "General"))];
 
   return (
     <div className="flex flex-col h-screen bg-background overflow-hidden">
       {/* Top Bar */}
       <div className="flex items-center gap-4 px-4 md:px-6 h-14 bg-card border-b border-border/60 shrink-0 shadow-sm">
-        {/* Logo */}
         <div className="flex items-center gap-2 shrink-0">
           <div className="w-7 h-7 rounded-lg gradient-primary flex items-center justify-center">
             <GraduationCap className="w-4 h-4 text-white" />
@@ -272,25 +363,17 @@ export default function ExamPage({ params }: { params: { id: string } }) {
 
         <div className="h-5 w-px bg-border mx-1" />
 
-        {/* Exam name */}
         <div className="flex-1 min-w-0">
-          <span className="text-sm font-semibold text-foreground truncate">
-            {params.id.replace(/-/g, " ").toUpperCase()}
-          </span>
+          <span className="text-sm font-semibold text-foreground truncate">{examName}</span>
         </div>
 
-        {/* Progress */}
         <div className="hidden md:flex items-center gap-3">
           <div className="text-xs text-muted-foreground whitespace-nowrap">
             {answeredCount}/{questions.length} answered
           </div>
-          <Progress
-            value={(answeredCount / questions.length) * 100}
-            className="w-24 h-2"
-          />
+          <Progress value={(answeredCount / questions.length) * 100} className="w-24 h-2" />
         </div>
 
-        {/* Timer */}
         <motion.div
           animate={timerWarning ? { scale: [1, 1.05, 1] } : {}}
           transition={{ duration: 1, repeat: timerWarning ? Infinity : 0 }}
@@ -305,7 +388,6 @@ export default function ExamPage({ params }: { params: { id: string } }) {
           {formatTime(timeLeft)}
         </motion.div>
 
-        {/* Palette toggle (mobile) */}
         <Button
           variant="ghost"
           size="icon"
@@ -315,7 +397,6 @@ export default function ExamPage({ params }: { params: { id: string } }) {
           {sidebarOpen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
         </Button>
 
-        {/* End test */}
         <Button
           variant="outline"
           size="sm"
@@ -339,7 +420,6 @@ export default function ExamPage({ params }: { params: { id: string } }) {
                 exit={{ opacity: 0, x: -20 }}
                 transition={{ duration: 0.25 }}
               >
-                {/* Question header */}
                 <div className="flex items-center gap-3 mb-6">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-muted-foreground">Question</span>
@@ -354,16 +434,14 @@ export default function ExamPage({ params }: { params: { id: string } }) {
                   </Badge>
                 </div>
 
-                {/* Question text */}
                 <div className="bg-card rounded-2xl border border-border/60 p-6 mb-6 shadow-sm">
                   <p className="text-base md:text-lg font-medium text-foreground leading-relaxed">
                     {currentQ.question_text}
                   </p>
                 </div>
 
-                {/* Options */}
                 <div className="space-y-3">
-                  {currentQ.options.map((option, i) => {
+                  {currentQ.options.map((option) => {
                     const isSelected = answers[currentIdx] === option.key;
                     return (
                       <motion.button
@@ -482,8 +560,6 @@ export default function ExamPage({ params }: { params: { id: string } }) {
             >
               <div className="p-4 border-b border-border/60">
                 <h3 className="font-bold text-sm text-foreground mb-3">Question Palette</h3>
-
-                {/* Legend */}
                 <div className="grid grid-cols-2 gap-1.5">
                   {(Object.entries(paletteColors) as [QuestionStatus, typeof paletteColors[QuestionStatus]][]).map(
                     ([status, config]) => (
@@ -498,20 +574,19 @@ export default function ExamPage({ params }: { params: { id: string } }) {
                 </div>
               </div>
 
-              {/* Section labels & grid */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {["Section A", "Section B", "Section C"].map((section) => {
-                  const sectionQs = questions.filter((q) => q.section === section);
-                  const startIdx = questions.findIndex((q) => q.section === section);
+                {sections.map((section) => {
+                  const sectionQs = questions
+                    .map((q, i) => ({ q, i }))
+                    .filter(({ q }) => (q.section ?? "General") === section);
                   return (
                     <div key={section}>
-                      <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">
+                      <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide truncate">
                         {section}
                       </p>
                       <div className="grid grid-cols-5 gap-1.5">
-                        {sectionQs.map((_, qi) => {
-                          const qIdx = startIdx + qi;
-                          const status = statuses[qIdx];
+                        {sectionQs.map(({ i: qIdx }) => {
+                          const status = statuses[qIdx] ?? "not_visited";
                           const config = paletteColors[status];
                           const isCurrent = qIdx === currentIdx;
                           return (
@@ -523,9 +598,7 @@ export default function ExamPage({ params }: { params: { id: string } }) {
                                 "w-full aspect-square rounded-lg text-xs font-bold transition-all flex items-center justify-center",
                                 config.bg,
                                 config.text,
-                                isCurrent
-                                  ? "ring-2 ring-primary ring-offset-1 ring-offset-background scale-110"
-                                  : ""
+                                isCurrent ? "ring-2 ring-primary ring-offset-1 ring-offset-background scale-110" : ""
                               )}
                             >
                               {qIdx + 1}
@@ -538,7 +611,6 @@ export default function ExamPage({ params }: { params: { id: string } }) {
                 })}
               </div>
 
-              {/* Stats */}
               <div className="p-4 border-t border-border/60 bg-muted/30">
                 <div className="grid grid-cols-3 gap-2 text-center">
                   {[
@@ -555,6 +627,7 @@ export default function ExamPage({ params }: { params: { id: string } }) {
 
                 <Button
                   onClick={() => setShowSubmit(true)}
+                  disabled={submitting}
                   className="w-full mt-3 rounded-xl gradient-primary border-0 text-white font-bold text-sm"
                 >
                   Submit Test
@@ -573,6 +646,7 @@ export default function ExamPage({ params }: { params: { id: string } }) {
             onReview={() => setShowSubmit(false)}
             onSubmit={handleSubmit}
             onClose={() => setShowSubmit(false)}
+            submitting={submitting}
           />
         )}
       </AnimatePresence>

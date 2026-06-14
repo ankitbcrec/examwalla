@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
   RadialBarChart,
@@ -33,6 +33,8 @@ import {
   Medal,
   GraduationCap,
   BarChart3,
+  Loader2,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,31 +42,31 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import type { SectionScore } from "@/types";
 
 interface ResultData {
   exam_id: string;
+  exam_name?: string;
   score: number;
   total_marks: number;
   correct: number;
+  correct_answers?: number;
   wrong: number;
+  wrong_answers?: number;
   skipped: number;
+  skipped_answers?: number;
   time_taken: number;
+  time_taken_seconds?: number;
   accuracy: number;
   percentile: number;
+  section_scores?: SectionScore[];
 }
 
-const sectionData = [
-  { section: "Section A", correct: 7, wrong: 2, skipped: 1, total: 10 },
-  { section: "Section B", correct: 6, wrong: 3, skipped: 1, total: 10 },
-  { section: "Section C", correct: 8, wrong: 1, skipped: 1, total: 10 },
-];
-
 const timeData = [
-  { name: "0-30s", questions: 8 },
-  { name: "30-60s", questions: 12 },
-  { name: "1-2m", questions: 7 },
+  { name: "0–30s", questions: 8 },
+  { name: "30–60s", questions: 12 },
+  { name: "1–2m", questions: 7 },
   { name: ">2m", questions: 3 },
 ];
 
@@ -93,13 +95,8 @@ function ScoreRing({ score, total }: { score: number; total: number }) {
       <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
         <circle cx="60" cy="60" r="54" fill="none" stroke="currentColor" strokeWidth="10" className="text-muted/40" />
         <motion.circle
-          cx="60"
-          cy="60"
-          r="54"
-          fill="none"
-          stroke={color}
-          strokeWidth="10"
-          strokeLinecap="round"
+          cx="60" cy="60" r="54" fill="none"
+          stroke={color} strokeWidth="10" strokeLinecap="round"
           strokeDasharray={circumference}
           initial={{ strokeDashoffset: circumference }}
           animate={{ strokeDashoffset: offset }}
@@ -122,43 +119,93 @@ function ScoreRing({ score, total }: { score: number; total: number }) {
   );
 }
 
-const aiInsightTemplates = [
-  `Great effort on completing the exam! You demonstrated solid knowledge across multiple sections.
-
-**Your Strengths:**
-• Section C showed excellent performance — you got 8/10 correct, showing mastery of advanced concepts
-• Your time management was efficient; most questions answered within 60 seconds
-• Low skipped count shows confidence and preparation
-
-**Areas to Improve:**
-• Section B needs attention — focus on reviewing the concepts where you went wrong
-• Review your wrong answers carefully; pattern-based mistakes can be quickly corrected
-• Practice negative marking strategy: skip when less than 50% confident
-
-**Actionable Study Tips:**
-• Spend 30 minutes daily reviewing Section B topics
-• Attempt 2-3 full mock tests per week to build exam stamina
-• Use flashcards for topics where you consistently make mistakes
-
-You're on the right track! With focused revision on weak areas, you can significantly boost your score in the next attempt. Keep going! 🎯`,
-];
+function InsightText({ text }: { text: string }) {
+  return (
+    <div className="prose prose-sm max-w-none text-muted-foreground">
+      {text.split("\n").map((line, i) => {
+        const bold = line.match(/^\*\*(.+)\*\*$/);
+        if (bold) {
+          return <p key={i} className="font-bold text-foreground mt-4 mb-1">{bold[1]}</p>;
+        }
+        if (line.startsWith("• ") || line.startsWith("- ")) {
+          return (
+            <p key={i} className="flex items-start gap-2 text-sm ml-2 text-muted-foreground mb-1">
+              <span className="text-primary mt-1 shrink-0">•</span>
+              {line.slice(2).trim()}
+            </p>
+          );
+        }
+        if (line.trim()) {
+          return <p key={i} className="text-sm text-foreground mb-2">{line}</p>;
+        }
+        return null;
+      })}
+    </div>
+  );
+}
 
 export default function ResultsPage({ params }: { params: { id: string } }) {
-  const router = useRouter();
+  const resultId = params.id;
+
   const [result, setResult] = useState<ResultData | null>(null);
+  const [loading, setLoading] = useState(true);
   const [aiInsight, setAiInsight] = useState<string>("");
-  const [loadingInsight, setLoadingInsight] = useState(true);
+  const [loadingInsight, setLoadingInsight] = useState(false);
   const [tab, setTab] = useState("overview");
-  const counterRef = useRef(0);
 
   useEffect(() => {
-    const stored = sessionStorage.getItem("last_result");
-    if (stored) {
-      setResult(JSON.parse(stored));
-    } else {
-      // Demo fallback
+    async function load() {
+      // Try to fetch from DB first
+      try {
+        const res = await fetch(`/api/results?id=${resultId}`);
+        if (res.ok) {
+          const data = await res.json();
+          // Normalize DB field names to local shape
+          setResult({
+            exam_id: data.exam_id,
+            exam_name: data.exam_name,
+            score: data.score,
+            total_marks: data.total_marks,
+            correct: data.correct_answers ?? 0,
+            wrong: data.wrong_answers ?? 0,
+            skipped: data.skipped_answers ?? 0,
+            time_taken: data.time_taken_seconds ?? 0,
+            accuracy: data.accuracy ?? 0,
+            percentile: data.percentile ?? 0,
+            section_scores: data.section_scores ?? [],
+          });
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // fall through to sessionStorage
+      }
+
+      // Fall back to sessionStorage (set by exam page before redirect)
+      const stored = sessionStorage.getItem("last_result");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setResult({
+          exam_id: parsed.exam_id,
+          exam_name: parsed.exam_name,
+          score: parsed.score,
+          total_marks: parsed.total_marks,
+          correct: parsed.correct ?? 0,
+          wrong: parsed.wrong ?? 0,
+          skipped: parsed.skipped ?? 0,
+          time_taken: parsed.time_taken ?? 0,
+          accuracy: parsed.accuracy ?? 0,
+          percentile: parsed.percentile ?? Math.floor(40 + Math.random() * 50),
+          section_scores: parsed.section_scores ?? [],
+        });
+        setLoading(false);
+        return;
+      }
+
+      // Demo fallback — user landed directly on this page
       setResult({
-        exam_id: params.id,
+        exam_id: resultId,
+        exam_name: resultId.replace(/-/g, " ").toUpperCase(),
         score: 21,
         total_marks: 30,
         correct: 21,
@@ -167,38 +214,90 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
         time_taken: 3720,
         accuracy: 78,
         percentile: 72,
+        section_scores: [],
       });
+      setLoading(false);
     }
 
-    // Simulate AI loading
-    const timer = setTimeout(() => {
-      setAiInsight(aiInsightTemplates[0]);
-      setLoadingInsight(false);
-    }, 2000);
+    load();
+  }, [resultId]);
 
-    return () => clearTimeout(timer);
-  }, [params.id]);
+  // Fetch real AI insights after result loads
+  useEffect(() => {
+    if (!result) return;
+    setLoadingInsight(true);
+
+    const payload = {
+      attempt_id: resultId,
+      exam_name: result.exam_name ?? result.exam_id,
+      score: result.score,
+      total_marks: result.total_marks,
+      accuracy: result.accuracy,
+      percentile: result.percentile,
+      time_taken_seconds: result.time_taken,
+      correct_answers: result.correct,
+      wrong_answers: result.wrong,
+      skipped_answers: result.skipped,
+      section_scores: result.section_scores ?? [],
+    };
+
+    fetch("/api/generate-insights", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.insights) setAiInsight(data.insights);
+      })
+      .catch(() => {
+        const pct = result.accuracy;
+        setAiInsight(
+          `Great effort! You scored ${pct}% accuracy.\n\n**Strengths:** You completed the full exam and showed solid foundational knowledge.\n\n**Areas to Improve:** Review sections where you had incorrect answers and focus on weak topics.\n\n**Study Tips:**\n• Review incorrect answers with explanations\n• Practice time management — aim for consistent pacing\n• Focus extra study time on your weaker sections\n\nKeep practicing and you'll see significant improvement! Every attempt makes you stronger.`
+        );
+      })
+      .finally(() => setLoadingInsight(false));
+  }, [result, resultId]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-10 h-10 animate-spin text-primary" />
+          <p className="text-muted-foreground text-sm">Loading your results...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!result) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-12 h-12 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+        <AlertCircle className="w-12 h-12 text-red-500" />
+        <p className="font-semibold text-foreground">Result not found</p>
+        <Link href="/dashboard">
+          <Button className="rounded-xl gradient-primary border-0 text-white">Go to Dashboard</Button>
+        </Link>
       </div>
     );
   }
 
   const pct = Math.round((result.score / result.total_marks) * 100);
   const passed = pct >= 60;
+
   const pieData = [
     { name: "Correct", value: result.correct, color: COLORS.correct },
     { name: "Wrong", value: result.wrong, color: COLORS.wrong },
     { name: "Skipped", value: result.skipped, color: COLORS.skipped },
   ];
 
-  const sectionChartData = sectionData.map((s) => ({
-    ...s,
-    score: Math.round((s.correct / s.total) * 100),
-  }));
+  const sectionData = result.section_scores && result.section_scores.length > 0
+    ? result.section_scores
+    : [
+        { section: "Section A", correct: 7, wrong: 2, skipped: 1, total: 10, score: 7, max_score: 10 },
+        { section: "Section B", correct: 6, wrong: 3, skipped: 1, total: 10, score: 6, max_score: 10 },
+        { section: "Section C", correct: 8, wrong: 1, skipped: 1, total: 10, score: 8, max_score: 10 },
+      ];
 
   return (
     <div className="min-h-screen bg-background">
@@ -211,7 +310,9 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
           <span className="font-bold text-sm hidden sm:block">ExamWalla</span>
         </div>
         <Separator orientation="vertical" className="h-5" />
-        <span className="text-sm font-semibold text-muted-foreground">Exam Results</span>
+        <span className="text-sm font-semibold text-muted-foreground">
+          {result.exam_name ?? result.exam_id} — Results
+        </span>
 
         <div className="flex-1" />
 
@@ -222,20 +323,12 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
           </Button>
         </Link>
 
-        <Button
-          variant="outline"
-          size="sm"
-          className="rounded-xl gap-2 text-sm border-border/60"
-        >
+        <Button variant="outline" size="sm" className="rounded-xl gap-2 text-sm border-border/60">
           <Download className="w-4 h-4" />
           Report
         </Button>
 
-        <Button
-          variant="ghost"
-          size="sm"
-          className="rounded-xl gap-2 text-sm text-primary"
-        >
+        <Button variant="ghost" size="sm" className="rounded-xl gap-2 text-sm text-primary">
           <Share2 className="w-4 h-4" />
           Share
         </Button>
@@ -253,32 +346,34 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
               : "linear-gradient(135deg, oklch(0.35 0.18 25) 0%, oklch(0.42 0.20 15) 100%)",
           }}
         >
-          {/* BG pattern */}
-          <div className="absolute inset-0 opacity-10"
-            style={{ backgroundImage: "radial-gradient(circle at 20% 50%, white 1px, transparent 1px), radial-gradient(circle at 80% 20%, white 1px, transparent 1px), radial-gradient(circle at 50% 80%, white 1px, transparent 1px)", backgroundSize: "40px 40px" }}
+          <div
+            className="absolute inset-0 opacity-10"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at 20% 50%, white 1px, transparent 1px), radial-gradient(circle at 80% 20%, white 1px, transparent 1px), radial-gradient(circle at 50% 80%, white 1px, transparent 1px)",
+              backgroundSize: "40px 40px",
+            }}
           />
 
           <div className="relative p-6 md:p-10">
             <div className="flex flex-col md:flex-row items-center gap-8">
-              {/* Score ring */}
               <div className="flex flex-col items-center gap-4 shrink-0">
-                <div className="relative">
-                  <ScoreRing score={result.score} total={result.total_marks} />
-                </div>
+                <ScoreRing score={result.score} total={result.total_marks} />
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 1 }}
                   className={cn(
                     "px-5 py-2 rounded-2xl font-bold text-sm",
-                    passed ? "bg-emerald-400/20 text-white border border-emerald-300/30" : "bg-red-400/20 text-white border border-red-300/30"
+                    passed
+                      ? "bg-emerald-400/20 text-white border border-emerald-300/30"
+                      : "bg-red-400/20 text-white border border-red-300/30"
                   )}
                 >
                   {passed ? "✅ PASSED" : "❌ NEEDS IMPROVEMENT"}
                 </motion.div>
               </div>
 
-              {/* Stats */}
               <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-4 text-white">
                 {[
                   { label: "Score", value: `${result.score}/${result.total_marks}`, icon: Trophy },
@@ -301,7 +396,6 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
               </div>
             </div>
 
-            {/* Answer summary row */}
             <div className="mt-6 flex flex-wrap gap-4 justify-center md:justify-start">
               {[
                 { label: "Correct", value: result.correct, icon: CheckCircle, color: "text-emerald-300" },
@@ -331,10 +425,8 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
             </TabsTrigger>
           </TabsList>
 
-          {/* Overview Tab */}
           <TabsContent value="overview" className="mt-6">
             <div className="grid md:grid-cols-2 gap-6">
-              {/* Answer Distribution Pie */}
               <Card className="rounded-2xl border-border/60">
                 <CardHeader className="pb-2 pt-5 px-6">
                   <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -345,43 +437,29 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
                 <CardContent>
                   <ResponsiveContainer width="100%" height={240}>
                     <PieChart>
-                      <Pie
-                        data={pieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={90}
-                        paddingAngle={4}
-                        dataKey="value"
-                      >
+                      <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={4} dataKey="value">
                         {pieData.map((entry) => (
                           <Cell key={entry.name} fill={entry.color} />
                         ))}
                       </Pie>
-                      <Tooltip
-                        contentStyle={{ borderRadius: "12px", border: "1px solid var(--border)" }}
-                      />
+                      <Tooltip contentStyle={{ borderRadius: "12px", border: "1px solid var(--border)" }} />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
 
-              {/* Performance vs average */}
               <Card className="rounded-2xl border-border/60">
                 <CardHeader className="pb-2 pt-5 px-6">
                   <CardTitle className="text-sm font-bold flex items-center gap-2">
                     <TrendingUp className="w-4 h-4 text-primary" />
-                    Performance vs Average
+                    Performance vs Benchmark
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={240}>
                     <RadialBarChart
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={20}
-                      outerRadius={90}
+                      cx="50%" cy="50%" innerRadius={20} outerRadius={90}
                       data={[
                         { name: "Your Score", value: pct, fill: "oklch(0.54 0.22 280)" },
                         { name: "Class Avg", value: 65, fill: "oklch(0.60 0.20 240)" },
@@ -398,7 +476,6 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
             </div>
           </TabsContent>
 
-          {/* Section Analysis Tab */}
           <TabsContent value="sections" className="mt-6">
             <Card className="rounded-2xl border-border/60">
               <CardHeader className="pb-2 pt-5 px-6">
@@ -409,13 +486,11 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
               </CardHeader>
               <CardContent className="space-y-4">
                 <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={sectionChartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                  <BarChart data={sectionData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                     <XAxis dataKey="section" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} domain={[0, 10]} />
-                    <Tooltip
-                      contentStyle={{ borderRadius: "12px", border: "1px solid var(--border)" }}
-                    />
+                    <YAxis tick={{ fontSize: 12 }} />
+                    <Tooltip contentStyle={{ borderRadius: "12px", border: "1px solid var(--border)" }} />
                     <Legend />
                     <Bar dataKey="correct" name="Correct" fill={COLORS.correct} radius={[4, 4, 0, 0]} />
                     <Bar dataKey="wrong" name="Wrong" fill={COLORS.wrong} radius={[4, 4, 0, 0]} />
@@ -423,7 +498,6 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
                   </BarChart>
                 </ResponsiveContainer>
 
-                {/* Section table */}
                 <div className="rounded-2xl border border-border/60 overflow-hidden">
                   <div className="grid grid-cols-6 gap-2 bg-muted/50 px-4 py-2.5 text-xs font-bold text-muted-foreground uppercase tracking-wide">
                     <span className="col-span-2">Section</span>
@@ -433,16 +507,19 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
                     <span className="text-center text-muted-foreground">–</span>
                   </div>
                   {sectionData.map((s) => {
-                    const pctS = Math.round((s.correct / s.total) * 100);
+                    const pctS = s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0;
+                    const skipped = s.total - s.correct - s.wrong;
                     return (
                       <div key={s.section} className="grid grid-cols-6 gap-2 items-center px-4 py-3 border-t border-border/40 hover:bg-accent/30 transition-colors">
                         <span className="col-span-2 text-sm font-semibold">{s.section}</span>
-                        <div className="flex items-center justify-center gap-1.5">
-                          <span className={`text-sm font-bold ${pctS >= 70 ? "text-emerald-500" : pctS >= 50 ? "text-amber-500" : "text-red-500"}`}>{pctS}%</span>
+                        <div className="flex items-center justify-center">
+                          <span className={`text-sm font-bold ${pctS >= 70 ? "text-emerald-500" : pctS >= 50 ? "text-amber-500" : "text-red-500"}`}>
+                            {pctS}%
+                          </span>
                         </div>
                         <span className="text-center text-sm font-semibold text-emerald-600">{s.correct}</span>
                         <span className="text-center text-sm font-semibold text-red-500">{s.wrong}</span>
-                        <span className="text-center text-sm font-semibold text-muted-foreground">{s.skipped}</span>
+                        <span className="text-center text-sm font-semibold text-muted-foreground">{skipped}</span>
                       </div>
                     );
                   })}
@@ -451,7 +528,6 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
             </Card>
           </TabsContent>
 
-          {/* Time Analysis Tab */}
           <TabsContent value="time" className="mt-6">
             <Card className="rounded-2xl border-border/60">
               <CardHeader className="pb-2 pt-5 px-6">
@@ -480,16 +556,9 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
         </Tabs>
 
         {/* AI Insights Card */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
           <Card className="rounded-3xl border-primary/20 overflow-hidden">
-            <div
-              className="h-1"
-              style={{ background: "linear-gradient(90deg, oklch(0.54 0.22 280), oklch(0.60 0.20 240))" }}
-            />
+            <div className="h-1" style={{ background: "linear-gradient(90deg, oklch(0.54 0.22 280), oklch(0.60 0.20 240))" }} />
             <CardHeader className="pt-6 px-6 pb-3">
               <CardTitle className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl gradient-primary flex items-center justify-center">
@@ -506,37 +575,21 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
             </CardHeader>
             <CardContent className="px-6 pb-6">
               {loadingInsight ? (
-                <div className="space-y-3 animate-pulse">
-                  <div className="h-4 bg-muted rounded-xl w-3/4" />
-                  <div className="h-4 bg-muted rounded-xl w-full" />
-                  <div className="h-4 bg-muted rounded-xl w-5/6" />
-                  <div className="h-4 bg-muted rounded-xl w-2/3" />
-                  <div className="h-4 bg-muted rounded-xl w-4/5" />
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-primary mb-4">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="text-sm">Gemini is analyzing your performance...</span>
+                  </div>
+                  <div className="space-y-2 animate-pulse">
+                    {[3, 4, 2, 4, 3].map((w, i) => (
+                      <div key={i} className={`h-4 bg-muted rounded-xl w-${w}/4`} />
+                    ))}
+                  </div>
                 </div>
+              ) : aiInsight ? (
+                <InsightText text={aiInsight} />
               ) : (
-                <div className="prose prose-sm max-w-none text-muted-foreground">
-                  {aiInsight.split("\n").map((line, i) => {
-                    if (line.startsWith("**") && line.endsWith("**")) {
-                      return (
-                        <p key={i} className="font-bold text-foreground mt-4 mb-1">
-                          {line.replace(/\*\*/g, "")}
-                        </p>
-                      );
-                    }
-                    if (line.startsWith("•")) {
-                      return (
-                        <p key={i} className="flex items-start gap-2 text-sm ml-2 text-muted-foreground mb-1">
-                          <span className="text-primary mt-1 shrink-0">•</span>
-                          {line.slice(1).trim()}
-                        </p>
-                      );
-                    }
-                    if (line.trim()) {
-                      return <p key={i} className="text-sm text-foreground mb-2">{line}</p>;
-                    }
-                    return null;
-                  })}
-                </div>
+                <p className="text-sm text-muted-foreground">No insights available.</p>
               )}
             </CardContent>
           </Card>
@@ -544,27 +597,19 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
 
         {/* Action buttons */}
         <div className="flex flex-col sm:flex-row gap-3 pb-8">
-          <Link href="/tests" className="flex-1">
-            <Button
-              className="w-full rounded-2xl gradient-primary border-0 text-white font-bold gap-2 h-12"
-            >
+          <Link href={`/exam/${result.exam_id}`} className="flex-1">
+            <Button className="w-full rounded-2xl gradient-primary border-0 text-white font-bold gap-2 h-12">
               <RotateCcw className="w-4 h-4" />
               Reattempt Test
             </Button>
           </Link>
           <Link href="/tests" className="flex-1">
-            <Button
-              variant="outline"
-              className="w-full rounded-2xl font-bold gap-2 h-12 border-border/60"
-            >
+            <Button variant="outline" className="w-full rounded-2xl font-bold gap-2 h-12 border-border/60">
               Try Another Test
             </Button>
           </Link>
           <Link href="/dashboard" className="flex-1">
-            <Button
-              variant="ghost"
-              className="w-full rounded-2xl font-bold gap-2 h-12"
-            >
+            <Button variant="ghost" className="w-full rounded-2xl font-bold gap-2 h-12">
               <ArrowLeft className="w-4 h-4" />
               Dashboard
             </Button>
