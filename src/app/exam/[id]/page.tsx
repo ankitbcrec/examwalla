@@ -16,12 +16,14 @@ import {
   Minimize2,
   Loader2,
 } from "lucide-react";
+import ExamLoadingScreen from "@/components/exam/ExamLoadingScreen";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import type { Question, QuestionStatus } from "@/types";
+import { logEvent } from "@/lib/event-logger";
 
 const EXAM_NAMES: Record<string, string> = {
   "nism-xv": "NISM Series XV",
@@ -50,23 +52,6 @@ function formatTime(s: number) {
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
-function LoadingScreen({ examName }: { examName: string }) {
-  return (
-    <div className="flex flex-col h-screen items-center justify-center bg-background gap-6">
-      <div className="w-14 h-14 rounded-2xl gradient-primary flex items-center justify-center">
-        <GraduationCap className="w-7 h-7 text-white" />
-      </div>
-      <div className="text-center">
-        <h2 className="text-xl font-bold text-foreground mb-2">{examName}</h2>
-        <p className="text-muted-foreground text-sm mb-6">Preparing your AI-generated questions...</p>
-        <div className="flex items-center gap-2 justify-center text-primary">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-sm font-medium">Generating with Gemini AI</span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 interface SubmitModalProps {
   unanswered: number;
@@ -158,6 +143,7 @@ export default function ExamPage({ params }: { params: Promise<{ id: string }> }
   const startTime = useRef(Date.now());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionCreated = useRef(false);
+  const timedOut = useRef(false);
 
   // Fetch questions from API (Gemini-generated, cached in Supabase)
   // Then immediately create a session record so the attempt is tracked from start
@@ -211,6 +197,11 @@ export default function ExamPage({ params }: { params: Promise<{ id: string }> }
             if (sessRes.ok) {
               const { id } = await sessRes.json();
               setSessionId(id);
+              logEvent("exam_started", examId, {
+                exam_name: examName,
+                total_questions: mapped.length,
+                session_id: id,
+              });
             }
           } catch {
             // Non-fatal — submit will fall back to creating a new result record
@@ -246,6 +237,7 @@ export default function ExamPage({ params }: { params: Promise<{ id: string }> }
       setTimeLeft((t) => {
         if (t <= 1) {
           clearInterval(timerRef.current!);
+          timedOut.current = true;
           doSubmit();
           return 0;
         }
@@ -264,6 +256,7 @@ export default function ExamPage({ params }: { params: Promise<{ id: string }> }
           ? "answered_and_marked"
           : "answered",
     }));
+    logEvent("question_answered", examId, { question_number: currentIdx + 1, answer: key });
   };
 
   const clearAnswer = () => {
@@ -273,13 +266,16 @@ export default function ExamPage({ params }: { params: Promise<{ id: string }> }
       return next;
     });
     setStatuses((prev) => ({ ...prev, [currentIdx]: "not_answered" }));
+    logEvent("answer_cleared", examId, { question_number: currentIdx + 1 });
   };
 
   const markForReview = () => {
+    const hasAnswer = !!answers[currentIdx];
     setStatuses((prev) => ({
       ...prev,
-      [currentIdx]: answers[currentIdx] ? "answered_and_marked" : "marked_for_review",
+      [currentIdx]: hasAnswer ? "answered_and_marked" : "marked_for_review",
     }));
+    logEvent("question_marked", examId, { question_number: currentIdx + 1, has_answer: hasAnswer });
     if (currentIdx < questions.length - 1) setCurrentIdx((i) => i + 1);
   };
 
@@ -291,6 +287,13 @@ export default function ExamPage({ params }: { params: Promise<{ id: string }> }
     if (submitting) return;
     setSubmitting(true);
     clearInterval(timerRef.current!);
+
+    const answeredSoFar = Object.keys(answers).length;
+    logEvent(timedOut.current ? "exam_timed_out" : "exam_submitted", examId, {
+      exam_name: examName,
+      answered: answeredSoFar,
+      total: questions.length,
+    });
 
     const timeTaken = Math.floor((Date.now() - startTime.current) / 1000);
     const correct = questions.filter((q, i) => answers[i] === q.correct_answer).length;
@@ -370,7 +373,7 @@ export default function ExamPage({ params }: { params: Promise<{ id: string }> }
 
   const timerWarning = timeLeft < 300;
 
-  if (loading) return <LoadingScreen examName={examName} />;
+  if (loading) return <ExamLoadingScreen examId={examId} examName={examName} />;
 
   if (loadError || questions.length === 0) {
     return (

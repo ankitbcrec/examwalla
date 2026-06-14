@@ -6,6 +6,7 @@ import Sidebar from "@/components/layout/Sidebar";
 import TopNav from "@/components/layout/TopNav";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createClient } from "@/lib/supabase";
+import { logEvent } from "@/lib/event-logger";
 
 interface UserProfile {
   name: string;
@@ -39,9 +40,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
     loadUser();
 
-    // Listen for auth state changes (e.g. token refresh, signout)
+    // Listen for auth state changes — log lifecycle events
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
+        if (event === "SIGNED_IN" && session) {
+          // user_signed_up is captured by the DB trigger on auth.users insert.
+          // Here we log every login that lands on the dashboard.
+          logEvent("user_logged_in", "global", {
+            provider: session.user.app_metadata?.provider ?? "unknown",
+          });
+        }
         if (event === "SIGNED_OUT" || !session) {
           router.replace("/login");
         }
@@ -52,6 +60,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [router]);
 
   const handleLogout = async () => {
+    logEvent("user_logged_out", "global");
     const supabase = createClient();
     await supabase.auth.signOut();
     router.replace("/login");

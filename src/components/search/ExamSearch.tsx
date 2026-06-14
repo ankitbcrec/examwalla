@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { logEvent } from "@/lib/event-logger";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, X, ArrowRight, TrendingUp, Clock } from "lucide-react";
 import {
@@ -53,6 +54,18 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
   // Reset active index when results change
   useEffect(() => setActiveIdx(0), [query]);
 
+  // Log search_performed 800 ms after the user stops typing
+  useEffect(() => {
+    if (!query.trim()) return;
+    const t = setTimeout(() => {
+      logEvent("search_performed", "global", {
+        query: query.trim(),
+        result_count: results.length,
+      });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [query, results.length]);
+
   const navigate = useCallback(
     (exam: ExamEntry) => {
       // Save to recent
@@ -63,10 +76,15 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
         const deduped = [exam, ...prev.filter((e) => e.id !== exam.id)].slice(0, 5);
         localStorage.setItem("ew_recent_searches", JSON.stringify(deduped));
       } catch {}
+      logEvent("exam_selected", exam.id, {
+        exam_name: exam.name,
+        category: exam.category,
+        query: query.trim() || null,
+      });
       onClose();
       router.push(`/exam/${exam.id}`);
     },
-    [onClose, router]
+    [onClose, router, query]
   );
 
   // Keyboard navigation

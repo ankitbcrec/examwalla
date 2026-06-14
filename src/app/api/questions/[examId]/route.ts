@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase-server";
 import { generateMockQuestions } from "@/lib/gemini";
+import { createLogger, uid } from "@/lib/logger";
 
 const EXAM_NAMES: Record<string, string> = {
   "nism-xv": "NISM Series XV – Research Analyst",
@@ -13,7 +14,6 @@ const EXAM_NAMES: Record<string, string> = {
   "bank-po": "Bank PO – IBPS",
 };
 
-// Detect dummy/fallback questions that snuck into cache from an earlier failed run
 function isFallbackQuestion(q: { question_text?: string }): boolean {
   return (
     typeof q.question_text === "string" &&
@@ -27,42 +27,81 @@ export async function GET(
 ) {
   const { examId } = await params;
   const refresh = req.nextUrl.searchParams.get("refresh") === "1";
-  const supabase = await createSupabaseServer();
+  const log = createLogger("GET /api/questions/[examId]");
+  const reqTimer = log.timer();
 
+  const supabase = await createSupabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
+
   if (!user) {
+    log.warn("unauthenticated request", { exam_id: examId });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 1 — Check cache (skipped if ?refresh=1 or if cached data is dummy)
+  log.info("request received", { exam_id: examId, user_id: uid(user.id), refresh });
+
+  // 1 — Cache lookup
   if (!refresh) {
-    const { data: cached } = await supabase
+    const cacheTimer = log.timer();
+    const { data: cached, error: cacheErr } = await supabase
       .from("cached_questions")
       .select("questions")
       .eq("exam_id", examId)
       .gt("expires_at", new Date().toISOString())
       .maybeSingle();
 
+    if (cacheErr) {
+      log.warn("cache lookup error", { exam_id: examId, error: cacheErr.message });
+    }
+
     const questions = cached?.questions as Array<{ question_text?: string }> | null;
+
     if (questions?.length && !isFallbackQuestion(questions[0])) {
+      cacheTimer.done("cache hit — returning cached questions", {
+        exam_id: examId,
+        question_count: questions.length,
+      });
+      reqTimer.done("request complete", { exam_id: examId, source: "cache" });
       return NextResponse.json({ questions, source: "cache" });
     }
 
     if (questions?.length) {
-      // Cache has dummy data — delete it and regenerate
-      console.warn(`[questions/${examId}] Cached dummy data detected — regenerating`);
-      await supabase.from("cached_questions").delete().eq("exam_id", examId);
+      log.warn("dummy/fallback questions in cache — purging and regenerating", {
+        exam_id: examId,
+        sample: questions[0]?.question_text?.slice(0, 60),
+      });
+      const { error: delErr } = await supabase
+        .from("cached_questions")
+        .delete()
+        .eq("exam_id", examId);
+      if (delErr) {
+        log.error("failed to purge dummy cache", { exam_id: examId, error: delErr.message });
+      } else {
+        log.info("dummy cache purged", { exam_id: examId });
+      }
+    } else {
+      cacheTimer.done("cache miss", { exam_id: examId });
     }
+  } else {
+    log.info("forced refresh — skipping cache", { exam_id: examId });
   }
 
   // 2 — Generate with Gemini
   const examName = EXAM_NAMES[examId] ?? examId.replace(/-/g, " ").toUpperCase();
+  log.info("calling Gemini", { exam_id: examId, exam_name: examName, question_count: 20 });
+  const geminiTimer = log.timer();
+
   let questions;
   try {
     questions = await generateMockQuestions(examName, 20);
+    geminiTimer.done("Gemini responded", {
+      exam_id: examId,
+      question_count: questions.length,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[questions/${examId}] Gemini failed:`, msg);
+    geminiTimer.done("Gemini failed", { exam_id: examId, error: msg });
+    log.error("AI generation error", { exam_id: examId, exam_name: examName, error: msg });
     return NextResponse.json(
       { error: `AI question generation failed: ${msg}` },
       { status: 502 }
@@ -82,8 +121,13 @@ export async function GET(
       { onConflict: "exam_id" }
     )
     .then(({ error }) => {
-      if (error) console.warn("[questions] cache upsert failed:", error.message);
+      if (error) {
+        log.error("cache upsert failed", { exam_id: examId, error: error.message });
+      } else {
+        log.info("questions cached", { exam_id: examId, ttl_days: 7 });
+      }
     });
 
+  reqTimer.done("request complete", { exam_id: examId, source: "gemini" });
   return NextResponse.json({ questions, source: "gemini" });
 }

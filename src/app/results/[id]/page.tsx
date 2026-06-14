@@ -44,6 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import type { SectionScore } from "@/types";
+import { logEvent } from "@/lib/event-logger";
 
 interface ResultData {
   exam_id: string;
@@ -221,6 +222,16 @@ export default function ResultsPage({ params }: { params: Promise<{ id: string }
 
     load();
   }, [resultId]);
+
+  // Log results page view once result data is available
+  useEffect(() => {
+    if (!result) return;
+    logEvent("results_viewed", result.exam_id, {
+      score: result.score,
+      total_marks: result.total_marks,
+      accuracy: result.accuracy,
+    });
+  }, [result]);
 
   // Fetch real AI insights after result loads
   useEffect(() => {

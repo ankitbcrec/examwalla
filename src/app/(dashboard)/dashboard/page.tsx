@@ -12,6 +12,7 @@ import { TrendingUp, ArrowRight, Flame, Zap, BookOpen } from "lucide-react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
 import type { DashboardStats, RecentTest } from "@/types";
+import { logEvent } from "@/lib/event-logger";
 
 const quickExams = [
   { name: "NISM Series XV", tag: "Finance", emoji: "📈", id: "nism-xv" },
@@ -34,6 +35,8 @@ export default function DashboardPage() {
   const [loadingTests, setLoadingTests] = useState(true);
 
   useEffect(() => {
+    logEvent("dashboard_viewed");
+
     // Get user display name
     const supabase = createClient();
     supabase.auth.getUser().then(({ data: { user } }) => {
