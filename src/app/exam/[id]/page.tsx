@@ -147,6 +147,7 @@ export default function ExamPage({ params }: { params: { id: string } }) {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [statuses, setStatuses] = useState<Record<number, QuestionStatus>>({});
@@ -156,15 +157,17 @@ export default function ExamPage({ params }: { params: { id: string } }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const startTime = useRef(Date.now());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionCreated = useRef(false);
 
   // Fetch questions from API (Gemini-generated, cached in Supabase)
+  // Then immediately create a session record so the attempt is tracked from start
   useEffect(() => {
     fetch(`/api/questions/${examId}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then(({ questions: raw }) => {
+      .then(async ({ questions: raw }) => {
         const mapped: Question[] = raw.map(
           (q: {
             question_text: string;
@@ -189,10 +192,33 @@ export default function ExamPage({ params }: { params: { id: string } }) {
           Object.fromEntries(mapped.map((_, i) => [i, "not_visited" as QuestionStatus]))
         );
         startTime.current = Date.now();
+
+        // Create a session record immediately — saves exam_id, exam_name, questions, started_at
+        if (!sessionCreated.current) {
+          sessionCreated.current = true;
+          try {
+            const sessRes = await fetch("/api/sessions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                exam_id: examId,
+                exam_name: examName,
+                questions: raw,           // raw from Gemini (includes correct_answer, explanation)
+                total_questions: mapped.length,
+              }),
+            });
+            if (sessRes.ok) {
+              const { id } = await sessRes.json();
+              setSessionId(id);
+            }
+          } catch {
+            // Non-fatal — submit will fall back to creating a new result record
+          }
+        }
       })
       .catch((e) => setLoadError(e.message))
       .finally(() => setLoading(false));
-  }, [examId]);
+  }, [examId, examName]);
 
   const currentQ = questions[currentIdx];
   const answeredCount = Object.values(answers).filter(Boolean).length;
@@ -274,17 +300,11 @@ export default function ExamPage({ params }: { params: { id: string } }) {
     // Derive section breakdown
     const sections = [...new Set(questions.map((q) => q.section ?? "General"))];
     const sectionScores = sections.map((sec) => {
-      const qs = questions.filter((q) => q.section === sec);
-      const secCorrect = qs.filter((q, qi) => {
-        const globalIdx = questions.indexOf(q);
-        return answers[globalIdx] === q.correct_answer;
-      }).length;
-      const secWrong = qs.filter((q) => {
-        const globalIdx = questions.indexOf(q);
-        return answers[globalIdx] && answers[globalIdx] !== q.correct_answer;
-      }).length;
+      const qs = questions.map((q, i) => ({ q, i })).filter(({ q }) => (q.section ?? "General") === sec);
+      const secCorrect = qs.filter(({ q, i }) => answers[i] === q.correct_answer).length;
+      const secWrong = qs.filter(({ q, i }) => answers[i] && answers[i] !== q.correct_answer).length;
       return {
-        section: sec ?? "General",
+        section: sec,
         correct: secCorrect,
         wrong: secWrong,
         total: qs.length,
@@ -294,8 +314,8 @@ export default function ExamPage({ params }: { params: { id: string } }) {
     });
 
     const payload = {
-      exam_id: examId,
-      exam_name: examName,
+      answers,                       // full answer map saved to history
+      section_scores: sectionScores,
       score: Math.round(score),
       total_marks: questions.length,
       correct,
@@ -303,29 +323,47 @@ export default function ExamPage({ params }: { params: { id: string } }) {
       skipped: questions.length - Object.keys(answers).length,
       time_taken: timeTaken,
       accuracy,
-      section_scores: sectionScores,
     };
 
-    // Store in sessionStorage as fallback
-    sessionStorage.setItem("last_result", JSON.stringify(payload));
+    // Store in sessionStorage as fallback for results page
+    sessionStorage.setItem("last_result", JSON.stringify({
+      exam_id: examId,
+      exam_name: examName,
+      ...payload,
+    }));
 
     try {
-      const res = await fetch("/api/results", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        const { id } = await res.json();
-        router.push(`/results/${id}`);
-      } else {
-        // Fall back to examId-based route if save fails
-        router.push(`/results/${examId}`);
+      // If a session was created on start, PATCH it with results
+      // Otherwise fall back to creating a new result record
+      let resultId: string | null = sessionId;
+
+      if (sessionId) {
+        const res = await fetch(`/api/sessions/${sessionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) resultId = null;
       }
+
+      if (!resultId) {
+        // Fallback: create via results route (no questions saved, but result still recorded)
+        const res = await fetch("/api/results", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ exam_id: examId, exam_name: examName, ...payload }),
+        });
+        if (res.ok) {
+          const { id } = await res.json();
+          resultId = id;
+        }
+      }
+
+      router.push(resultId ? `/results/${resultId}` : `/results/${examId}`);
     } catch {
       router.push(`/results/${examId}`);
     }
-  }, [answers, questions, examId, examName, router, submitting]);
+  }, [answers, questions, examId, examName, sessionId, router, submitting]);
 
   const handleSubmit = () => doSubmit();
 

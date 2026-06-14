@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase-server";
 
-// POST /api/results — save a completed test attempt
-export async function POST(req: NextRequest) {
+// PATCH /api/sessions/[id] — called when user SUBMITS a test
+// Updates the existing session with answers, score, and all result data
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
   const supabase = await createSupabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -14,12 +19,9 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await supabase
     .from("test_attempts")
-    .insert({
-      user_id: user.id,
-      exam_id: body.exam_id,
-      exam_name: body.exam_name,
-      answers: body.answers ?? null,
-      section_scores: body.section_scores ?? null,
+    .update({
+      answers: body.answers,
+      section_scores: body.section_scores,
       score: body.score,
       total_marks: body.total_marks,
       correct_answers: body.correct,
@@ -30,20 +32,25 @@ export async function POST(req: NextRequest) {
       time_taken_seconds: body.time_taken,
       status: "completed",
     })
+    .eq("id", id)
+    .eq("user_id", user.id)
     .select("id")
     .single();
 
   if (error) {
-    console.error("Insert result error:", error);
+    console.error("Complete session error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
   return NextResponse.json({ id: data.id });
 }
 
-// GET /api/results?id=uuid — fetch a single attempt
-// GET /api/results — fetch recent 10 attempts
-export async function GET(req: NextRequest) {
+// GET /api/sessions/[id] — fetch a single session (includes questions for review)
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
   const supabase = await createSupabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -51,28 +58,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const id = new URL(req.url).searchParams.get("id");
-
-  if (id) {
-    const { data, error } = await supabase
-      .from("test_attempts")
-      .select("*")
-      .eq("id", id)
-      .eq("user_id", user.id)
-      .single();
-
-    if (error || !data) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-    return NextResponse.json(data);
-  }
-
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("test_attempts")
     .select("*")
+    .eq("id", id)
     .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(10);
+    .single();
 
-  return NextResponse.json(data ?? []);
+  if (error || !data) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  return NextResponse.json(data);
 }

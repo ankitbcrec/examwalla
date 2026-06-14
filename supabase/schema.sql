@@ -86,21 +86,28 @@ create policy "Authenticated can update questions"
 
 
 -- 3. TEST ATTEMPTS
+-- One row per test session. Created when user starts, updated on submit.
 create table if not exists public.test_attempts (
-  id                uuid primary key default gen_random_uuid(),
-  user_id           uuid references auth.users(id) on delete cascade not null,
-  exam_id           text not null,
-  exam_name         text not null,
-  score             integer not null default 0,
-  total_marks       integer not null,
-  correct_answers   integer not null default 0,
-  wrong_answers     integer not null default 0,
-  skipped_answers   integer not null default 0,
-  accuracy          integer not null default 0,
-  percentile        integer default 0,
+  id                 uuid primary key default gen_random_uuid(),
+  user_id            uuid references auth.users(id) on delete cascade not null,
+  exam_id            text not null,
+  exam_name          text not null,
+  -- Saved when test STARTS
+  questions          jsonb,                            -- AI-generated questions served to this user
+  started_at         timestamptz default now() not null,
+  -- Saved when test COMPLETES
+  answers            jsonb,                            -- { "0": "A", "1": "C", ... }
+  section_scores     jsonb,                            -- [{ section, correct, wrong, total, score, max_score }]
+  score              integer not null default 0,
+  total_marks        integer not null default 0,
+  correct_answers    integer not null default 0,
+  wrong_answers      integer not null default 0,
+  skipped_answers    integer not null default 0,
+  accuracy           integer not null default 0,
+  percentile         integer default 0,
   time_taken_seconds integer not null default 0,
-  status            text not null default 'completed',
-  created_at        timestamptz default now() not null
+  status             text not null default 'in_progress', -- 'in_progress' | 'completed' | 'abandoned'
+  created_at         timestamptz default now() not null
 );
 
 -- Indexes for fast user-scoped queries (critical for 10K users)
@@ -110,6 +117,8 @@ create index if not exists idx_test_attempts_user_created
   on public.test_attempts(user_id, created_at desc);
 create index if not exists idx_test_attempts_exam
   on public.test_attempts(exam_id);
+create index if not exists idx_test_attempts_status
+  on public.test_attempts(user_id, status);
 
 alter table public.test_attempts enable row level security;
 
@@ -120,3 +129,8 @@ create policy "Users can read own attempts"
 create policy "Users can insert own attempts"
   on public.test_attempts for insert
   with check (auth.uid() = user_id);
+
+-- Users can update their own in-progress attempts (to complete them)
+create policy "Users can update own attempts"
+  on public.test_attempts for update
+  using (auth.uid() = user_id);
