@@ -163,9 +163,10 @@ export default function ExamPage({ params }: { params: Promise<{ id: string }> }
   // Then immediately create a session record so the attempt is tracked from start
   useEffect(() => {
     fetch(`/api/questions/${examId}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error ?? `HTTP ${r.status}`);
+        return json;
       })
       .then(async ({ questions: raw }) => {
         const mapped: Question[] = raw.map(

@@ -3,9 +3,12 @@ import { TestResult } from "@/types";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
+// Use stable model — gemini-2.0-flash-exp was deprecated
+const MODEL = "gemini-2.0-flash";
+
 export async function generateAIInsights(result: TestResult): Promise<string> {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    const model = genAI.getGenerativeModel({ model: MODEL });
 
     const prompt = `
 You are a friendly and encouraging AI tutor for a student who just completed a mock exam.
@@ -28,13 +31,14 @@ Please provide:
 4. Specific, actionable study tips (2-3 bullet points)
 5. A motivating closing statement
 
-Keep it concise, friendly, and student-focused. Use simple language. Format with clear sections.
+Keep it concise, friendly, and student-focused. Use simple language. Format with clear sections using **bold** headers.
     `.trim();
 
     const result_ai = await model.generateContent(prompt);
     const response = await result_ai.response;
     return response.text();
-  } catch {
+  } catch (err) {
+    console.error("[Gemini] generateAIInsights failed:", err);
     return `Great effort on completing the exam! You scored ${result.accuracy}% accuracy.
 
 **Strengths:** You showed persistence by completing the full exam. Your correct answers demonstrate solid foundational knowledge.
@@ -42,17 +46,18 @@ Keep it concise, friendly, and student-focused. Use simple language. Format with
 **Areas to Improve:** Focus on the sections where you had more incorrect answers. Review the explanations for questions you missed.
 
 **Study Tips:**
-- Review incorrect answers with explanations
-- Practice time management — aim for consistent pacing
-- Focus extra study time on your weaker sections
+• Review incorrect answers with explanations
+• Practice time management — aim for consistent pacing
+• Focus extra study time on your weaker sections
 
-Keep up the practice and you'll see significant improvement! Every attempt makes you stronger. 💪`;
+Keep up the practice and you'll see significant improvement! Every attempt makes you stronger.`;
   }
 }
 
+// Throws on failure — callers decide whether to use fallback
 export async function generateMockQuestions(
   examName: string,
-  totalQuestions: number = 10
+  totalQuestions: number = 30
 ): Promise<
   Array<{
     question_text: string;
@@ -62,53 +67,51 @@ export async function generateMockQuestions(
     section: string;
   }>
 > {
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+  const model = genAI.getGenerativeModel({ model: MODEL });
 
-    const prompt = `
+  const prompt = `
 Generate ${totalQuestions} multiple-choice questions for a "${examName}" mock exam.
 
-Return ONLY a valid JSON array with this exact structure (no markdown, no extra text):
+Return ONLY a valid JSON array — no markdown fences, no extra text before or after:
 [
   {
-    "question_text": "Question text here?",
+    "question_text": "Full question text here?",
     "options": [
-      {"key": "A", "text": "Option A text"},
-      {"key": "B", "text": "Option B text"},
-      {"key": "C", "text": "Option C text"},
-      {"key": "D", "text": "Option D text"}
+      {"key": "A", "text": "Option A"},
+      {"key": "B", "text": "Option B"},
+      {"key": "C", "text": "Option C"},
+      {"key": "D", "text": "Option D"}
     ],
     "correct_answer": "A",
     "explanation": "Brief explanation of why A is correct",
-    "section": "Topic/Section Name"
+    "section": "Topic or Section Name"
   }
 ]
 
-Make questions realistic, educational, and varied in difficulty. Cover different sections/topics of the exam.
-    `.trim();
+Requirements:
+- Questions must be realistic and specific to ${examName}
+- Cover at least 3 different sections/topics
+- Mix easy, medium, and hard difficulty
+- correct_answer must be exactly one of: "A", "B", "C", "D"
+  `.trim();
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
-    const jsonStart = text.indexOf("[");
-    const jsonEnd = text.lastIndexOf("]") + 1;
-    const jsonStr = text.slice(jsonStart, jsonEnd);
-    return JSON.parse(jsonStr);
-  } catch {
-    return generateFallbackQuestions(examName, totalQuestions);
+  const result = await model.generateContent(prompt);
+  const text = result.response.text().trim();
+
+  // Strip any markdown code fences Gemini might add despite instructions
+  const clean = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  const jsonStart = clean.indexOf("[");
+  const jsonEnd = clean.lastIndexOf("]") + 1;
+
+  if (jsonStart === -1 || jsonEnd === 0) {
+    throw new Error(`Gemini returned non-JSON response: ${clean.slice(0, 200)}`);
   }
-}
 
-function generateFallbackQuestions(examName: string, count: number) {
-  return Array.from({ length: count }, (_, i) => ({
-    question_text: `Sample question ${i + 1} for ${examName}: Which of the following is correct?`,
-    options: [
-      { key: "A", text: "First option" },
-      { key: "B", text: "Second option" },
-      { key: "C", text: "Third option" },
-      { key: "D", text: "Fourth option" },
-    ],
-    correct_answer: "A",
-    explanation: "This is the correct answer because it best represents the concept.",
-    section: "General",
-  }));
+  const parsed = JSON.parse(clean.slice(jsonStart, jsonEnd));
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("Gemini returned empty question array");
+  }
+
+  return parsed;
 }
