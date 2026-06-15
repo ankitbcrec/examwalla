@@ -18,18 +18,33 @@ export async function callGemini(
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set in environment");
 
-  const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature,
-        ...(jsonMode && { response_mime_type: "application/json" }),
-        ...(responseSchema && { response_schema: responseSchema }),
-      },
-    }),
-  });
+  // 90-second hard timeout — Gemini should never take longer than this
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90_000);
+
+  let res: Response;
+  try {
+    res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature,
+          maxOutputTokens: 8192,
+          // thinkingBudget:0 disables Gemini 2.5's extended thinking step.
+          // Without this, the model generates 100-300KB of internal reasoning
+          // tokens before the answer — causing 3+ min latency and enormous cost.
+          thinkingConfig: { thinkingBudget: 0 },
+          ...(jsonMode && { response_mime_type: "application/json" }),
+          ...(responseSchema && { response_schema: responseSchema }),
+        },
+      }),
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -39,8 +54,12 @@ export async function callGemini(
   }
 
   const data = await res.json();
-  const text: string | undefined =
-    data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  // Gemini 2.5 returns multiple parts when thinking is partially active.
+  // Skip any part flagged as a thought — we want only the actual answer.
+  type Part = { thought?: boolean; text?: string };
+  const parts: Part[] = data?.candidates?.[0]?.content?.parts ?? [];
+  const text = parts.find((p) => !p.thought)?.text;
 
   if (!text) throw new Error("Gemini returned empty response");
   return text.trim();
