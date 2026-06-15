@@ -32,7 +32,7 @@ export async function callGemini(
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature,
-          maxOutputTokens: 16384,
+          maxOutputTokens: 32768,
           // thinkingBudget:0 disables Gemini 2.5's extended thinking step.
           // Without this, the model generates 100-300KB of internal reasoning
           // tokens before the answer — causing 3+ min latency and enormous cost.
@@ -55,14 +55,57 @@ export async function callGemini(
 
   const data = await res.json();
 
-  // Gemini 2.5 returns multiple parts when thinking is partially active.
-  // Skip any part flagged as a thought — we want only the actual answer.
+  // Gemini 2.5 may return multiple parts: one for thinking tokens, one for the answer.
+  // Prefer a part explicitly NOT flagged as thought; fall back to the last part.
   type Part = { thought?: boolean; text?: string };
   const parts: Part[] = data?.candidates?.[0]?.content?.parts ?? [];
-  const text = parts.find((p) => !p.thought)?.text;
+  const text = (parts.find((p) => !p.thought) ?? parts[parts.length - 1])?.text;
 
   if (!text) throw new Error("Gemini returned empty response");
   return text.trim();
+}
+
+/**
+ * Robust JSON array extractor.
+ *
+ * Handles three failure modes from Gemini 2.5:
+ *  1. Thinking tokens prepended before the JSON array (finds '[' and extracts from there)
+ *  2. Truncated array (recovers every complete object before the cut-off)
+ *  3. Clean output (fast path: JSON.parse succeeds immediately)
+ */
+export function extractJsonArray(raw: string): unknown[] {
+  // Fast path: clean JSON with no preamble
+  try { return JSON.parse(raw); } catch { /* fall through */ }
+
+  // Locate the opening bracket of the JSON array (skips any thinking preamble)
+  const start = raw.indexOf("[");
+  if (start === -1) throw new Error("No JSON array found in Gemini response");
+
+  // Walk forward to find the matching close bracket
+  let depth = 0;
+  for (let i = start; i < raw.length; i++) {
+    if (raw[i] === "[") depth++;
+    else if (raw[i] === "]" && --depth === 0) {
+      return JSON.parse(raw.slice(start, i + 1));
+    }
+  }
+
+  // Array was truncated mid-stream — recover whatever complete objects we have
+  const slice = raw.slice(start);
+
+  // Try: last complete object followed by a comma (i.e. more items were expected)
+  const lastComma = slice.lastIndexOf("},");
+  if (lastComma > 0) {
+    try { return JSON.parse(slice.slice(0, lastComma + 1) + "]"); } catch { /* fall through */ }
+  }
+
+  // Try: last closing brace (final item, no trailing comma)
+  const lastBrace = slice.lastIndexOf("}");
+  if (lastBrace > 0) {
+    try { return JSON.parse(slice.slice(0, lastBrace + 1) + "]"); } catch { /* fall through */ }
+  }
+
+  throw new Error(`Gemini response malformed and unrecoverable (length: ${raw.length})`);
 }
 
 // Structural schema for question generation.
@@ -128,16 +171,22 @@ Requirements:
 - correct_answer must be exactly one of: "A", "B", "C", "D"
 - Keep each explanation to 1-2 sentences maximum (brevity saves tokens)`;
 
-  // jsonMode + responseSchema: Gemini is constrained to the exact field names.
-  // Prevents {"D":"text","key":"C"} hallucination on option objects.
   const text = await callGemini(prompt, 0.7, true, QUESTION_SCHEMA);
 
-  const parsed = JSON.parse(text);
+  // extractJsonArray handles thinking-token preamble and truncated output gracefully.
+  // Even if Gemini cuts off mid-array, we recover all complete questions before the break.
+  const parsed = extractJsonArray(text);
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("Gemini returned empty question array");
   }
 
-  return parsed;
+  return parsed as Array<{
+    question_text: string;
+    options: { key: string; text: string }[];
+    correct_answer: string;
+    explanation: string;
+    section: string;
+  }>;
 }
 
 export async function generateAIInsights(result: TestResult): Promise<string> {
