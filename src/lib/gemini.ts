@@ -32,7 +32,7 @@ export async function callGemini(
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature,
-          maxOutputTokens: 8192,
+          maxOutputTokens: 16384,
           // thinkingBudget:0 disables Gemini 2.5's extended thinking step.
           // Without this, the model generates 100-300KB of internal reasoning
           // tokens before the answer — causing 3+ min latency and enormous cost.
@@ -125,7 +125,8 @@ Requirements:
 - Questions must be realistic and specific to "${examName}"
 - Cover at least 3 different sections/topics
 - Mix easy, medium, and hard difficulty
-- correct_answer must be exactly one of: "A", "B", "C", "D"`;
+- correct_answer must be exactly one of: "A", "B", "C", "D"
+- Keep each explanation to 1-2 sentences maximum (brevity saves tokens)`;
 
   // jsonMode + responseSchema: Gemini is constrained to the exact field names.
   // Prevents {"D":"text","key":"C"} hallucination on option objects.
