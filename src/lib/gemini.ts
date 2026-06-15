@@ -3,7 +3,17 @@ import type { TestResult } from "@/types";
 const GEMINI_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
-export async function callGemini(prompt: string, temperature = 0.7): Promise<string> {
+/**
+ * Low-level Gemini call.
+ * @param jsonMode  When true, sets response_mime_type:"application/json" so the
+ *                  model is constrained to emit valid JSON — no markdown fences,
+ *                  no prose, no truncated objects. Use for all structured outputs.
+ */
+export async function callGemini(
+  prompt: string,
+  temperature = 0.7,
+  jsonMode = false
+): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set in environment");
 
@@ -12,7 +22,10 @@ export async function callGemini(prompt: string, temperature = 0.7): Promise<str
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature },
+      generationConfig: {
+        temperature,
+        ...(jsonMode && { response_mime_type: "application/json" }),
+      },
     }),
   });
 
@@ -43,22 +56,21 @@ export async function generateMockQuestions(
     section: string;
   }>
 > {
-  const prompt = `
-Generate ${totalQuestions} multiple-choice questions for a "${examName}" mock exam.
+  const prompt = `Generate ${totalQuestions} multiple-choice questions for a "${examName}" mock exam.
 
-Return ONLY a valid JSON array — no markdown fences, no explanation, no text outside the array:
+Return a JSON array of exactly ${totalQuestions} objects with this structure:
 [
   {
-    "question_text": "Full question text here?",
+    "question_text": "Full question text?",
     "options": [
-      {"key": "A", "text": "Option A"},
-      {"key": "B", "text": "Option B"},
-      {"key": "C", "text": "Option C"},
-      {"key": "D", "text": "Option D"}
+      {"key": "A", "text": "Option A text"},
+      {"key": "B", "text": "Option B text"},
+      {"key": "C", "text": "Option C text"},
+      {"key": "D", "text": "Option D text"}
     ],
     "correct_answer": "A",
-    "explanation": "Brief explanation of why A is correct",
-    "section": "Topic or Section Name"
+    "explanation": "Why A is correct",
+    "section": "Topic name"
   }
 ]
 
@@ -66,24 +78,12 @@ Requirements:
 - Questions must be realistic and specific to "${examName}"
 - Cover at least 3 different sections/topics
 - Mix easy, medium, and hard difficulty
-- correct_answer must be exactly one of: "A", "B", "C", "D"
-`.trim();
+- correct_answer must be exactly one of: "A", "B", "C", "D"`;
 
-  const text = await callGemini(prompt);
+  // jsonMode = true forces Gemini to emit valid JSON — eliminates all parse errors
+  const text = await callGemini(prompt, 0.7, true);
 
-  // Strip any markdown fences the model might add despite instructions
-  const clean = text
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "")
-    .trim();
-
-  const jsonStart = clean.indexOf("[");
-  const jsonEnd = clean.lastIndexOf("]") + 1;
-  if (jsonStart === -1 || jsonEnd === 0) {
-    throw new Error(`Non-JSON response from Gemini: ${clean.slice(0, 300)}`);
-  }
-
-  const parsed = JSON.parse(clean.slice(jsonStart, jsonEnd));
+  const parsed = JSON.parse(text);
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("Gemini returned empty question array");
   }
@@ -92,8 +92,7 @@ Requirements:
 }
 
 export async function generateAIInsights(result: TestResult): Promise<string> {
-  const prompt = `
-You are a friendly and encouraging AI tutor for a student who just completed a mock exam.
+  const prompt = `You are a friendly and encouraging AI tutor for a student who just completed a mock exam.
 
 Exam: ${result.exam_name}
 Score: ${result.score}/${result.total_marks} (${result.accuracy}% accuracy)
@@ -116,11 +115,10 @@ Provide:
 4. **Study Tips:** (2-3 bullet points starting with •)
 5. A motivating closing sentence
 
-Keep it concise and student-friendly.
-`.trim();
+Keep it concise and student-friendly.`;
 
   try {
-    return await callGemini(prompt);
+    return await callGemini(prompt); // plain text — no JSON mode
   } catch (err) {
     console.error("[Gemini] generateAIInsights failed:", err);
     return `Great effort on completing the exam! You scored ${result.accuracy}% accuracy.

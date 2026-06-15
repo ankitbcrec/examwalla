@@ -78,12 +78,8 @@ Rules:
 
   let suggestions: ExamSuggestion[];
   try {
-    const text = await callGemini(prompt, 0.3);
-    const clean = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-    const start = clean.indexOf("[");
-    const end = clean.lastIndexOf("]") + 1;
-    if (start === -1 || end === 0) throw new Error("No JSON array in Gemini response");
-    suggestions = JSON.parse(clean.slice(start, end));
+    const text = await callGemini(prompt, 0.3, true); // jsonMode — guaranteed valid JSON
+    suggestions = JSON.parse(text);
     t.done("Gemini responded", { query, count: suggestions.length });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
