@@ -1,10 +1,7 @@
 import type { TestResult } from "@/types";
 
-// gemini-2.0-flash: no thinking mode, ~5-15s for 20 questions, cheaper than 2.5
-// gemini-2.5-flash was triggering 90s+ of internal "thinking" that can't be disabled
-// via the v1beta API, causing aborts and massive token waste.
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
 
 /**
  * Low-level Gemini call.
