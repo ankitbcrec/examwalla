@@ -136,8 +136,18 @@ export async function GET(
     log.info("forced refresh — skipping cache", { exam_id: examId });
   }
 
-  // 2 — Generate with Gemini
-  const examName = EXAM_NAMES[examId] ?? examId.replace(/-/g, " ").toUpperCase();
+  // 2 — Resolve exam name: static map → exams catalog → slug fallback
+  let examName = EXAM_NAMES[examId];
+  if (!examName) {
+    const { data: catalogEntry } = await supabase
+      .from("exams")
+      .select("name")
+      .eq("id", examId)
+      .maybeSingle();
+    examName = catalogEntry?.name ?? examId.replace(/-/g, " ").toUpperCase();
+  }
+
+  // 3 — Generate with Gemini
   log.info("calling Gemini", { exam_id: examId, exam_name: examName, question_count: 20 });
   const geminiTimer = log.timer();
 

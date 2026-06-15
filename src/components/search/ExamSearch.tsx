@@ -12,6 +12,7 @@ import {
 } from "@/lib/exam-catalog";
 import { cn } from "@/lib/utils";
 import { logEvent } from "@/lib/event-logger";
+import { SEARCH_CONFIG } from "@/config/search";
 import type { ExamSuggestion } from "@/app/api/search-suggest/route";
 
 interface ExamSearchProps {
@@ -48,7 +49,10 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
   const staticResults = query.trim() ? searchExams(query) : POPULAR_EXAMS;
 
   // Show static results first; fall back to AI results when static are thin
-  const useAI = query.trim().length >= 3 && staticResults.length < 4;
+  const useAI =
+    SEARCH_CONFIG.AI_ENABLED &&
+    query.trim().length >= SEARCH_CONFIG.AI_MIN_CHARS &&
+    staticResults.length < SEARCH_CONFIG.AI_THRESHOLD;
   const results: Array<ExamEntry & { _ai?: boolean }> = useAI && aiSuggestions.length > 0
     ? [
         ...staticResults,
@@ -102,7 +106,7 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
     return () => clearTimeout(t);
   }, [query, results.length]);
 
-  // AI fallback — fires 600ms after typing stops, only when static results are thin
+  // AI fallback — fires after debounce, only when static results are thin
   useEffect(() => {
     if (!useAI || aiSearched) return;
     const t = setTimeout(async () => {
@@ -119,7 +123,7 @@ export default function ExamSearch({ open, onClose }: ExamSearchProps) {
         setAiLoading(false);
         setAiSearched(true);
       }
-    }, 600);
+    }, SEARCH_CONFIG.AI_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [query, useAI, aiSearched]);
 
