@@ -87,15 +87,32 @@ export async function GET(
     const questions = cached?.questions as Array<{ question_text?: string }> | null;
 
     if (questions?.length && !isFallbackQuestion(questions[0])) {
-      cacheTimer.done("cache hit — returning cached questions", {
+      const normalized = normalizeQuestions(questions as Array<Record<string, unknown>>);
+
+      // If normalization changed anything, write the clean version back to cache
+      // so future requests don't need to repair and the DB stays clean.
+      const wasRepaired = JSON.stringify(normalized) !== JSON.stringify(questions);
+      if (wasRepaired) {
+        log.warn("malformed options detected in cache — rewriting with repaired data", {
+          exam_id: examId,
+        });
+        supabase
+          .from("cached_questions")
+          .update({ questions: normalized })
+          .eq("exam_id", examId)
+          .then(({ error }) => {
+            if (error) log.error("cache repair write failed", { exam_id: examId, error: error.message });
+            else log.info("cache repaired and updated", { exam_id: examId });
+          });
+      }
+
+      cacheTimer.done("cache hit", {
         exam_id: examId,
-        question_count: questions.length,
+        question_count: normalized.length,
+        repaired: wasRepaired,
       });
       reqTimer.done("request complete", { exam_id: examId, source: "cache" });
-      return NextResponse.json({
-        questions: normalizeQuestions(questions as Array<Record<string, unknown>>),
-        source: "cache",
-      });
+      return NextResponse.json({ questions: normalized, source: "cache" });
     }
 
     if (questions?.length) {
