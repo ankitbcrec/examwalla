@@ -344,19 +344,9 @@ function ResultRow({
           <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0", meta.bg, meta.color)}>
             {exam.category}
           </span>
-          {isAI ? (
+          {isAI && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-md shrink-0 ml-auto bg-violet-50 text-violet-600 dark:bg-violet-950/40 flex items-center gap-0.5">
               <Sparkles className="w-2.5 h-2.5" /> AI
-            </span>
-          ) : (
-            <span className={cn(
-              "text-[10px] px-1.5 py-0.5 rounded-md shrink-0 ml-auto",
-              exam.difficulty === "Easy" && "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40",
-              exam.difficulty === "Moderate" && "bg-amber-50 text-amber-600 dark:bg-amber-950/40",
-              exam.difficulty === "Hard" && "bg-red-50 text-red-600 dark:bg-red-950/40",
-              exam.difficulty === "Very Hard" && "bg-red-100 text-red-700 dark:bg-red-950/60"
-            )}>
-              {exam.difficulty}
             </span>
           )}
         </div>

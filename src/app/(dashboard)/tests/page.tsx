@@ -336,9 +336,6 @@ export default function TestsPage() {
                       <p className="font-semibold text-sm text-foreground">{exam.name}</p>
                       <p className="text-xs text-muted-foreground truncate">{exam.description}</p>
                     </div>
-                    <Badge variant="outline" className={`text-xs ${difficultyConfig[exam.difficulty]}`}>
-                      {exam.difficulty}
-                    </Badge>
                   </button>
                 ))}
               </motion.div>
@@ -391,15 +388,8 @@ export default function TestsPage() {
                   }}
                 />
                 <CardContent className="p-5 flex flex-col h-full">
-                  {/* Icon + difficulty */}
-                  <div className="flex items-start justify-between mb-3">
+                  <div className="mb-3">
                     <div className="text-4xl">{exam.icon}</div>
-                    <Badge
-                      variant="outline"
-                      className={`text-xs font-semibold ${difficultyConfig[exam.difficulty]}`}
-                    >
-                      {exam.difficulty}
-                    </Badge>
                   </div>
 
                   {/* Name + description */}
