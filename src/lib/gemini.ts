@@ -5,14 +5,15 @@ const GEMINI_URL =
 
 /**
  * Low-level Gemini call.
- * @param jsonMode  When true, sets response_mime_type:"application/json" so the
- *                  model is constrained to emit valid JSON — no markdown fences,
- *                  no prose, no truncated objects. Use for all structured outputs.
+ * @param jsonMode       Sets response_mime_type:"application/json" — valid JSON guaranteed.
+ * @param responseSchema OpenAPI-style schema passed to Gemini for structural enforcement.
+ *                       Requires jsonMode:true. Prevents field-name hallucination.
  */
 export async function callGemini(
   prompt: string,
   temperature = 0.7,
-  jsonMode = false
+  jsonMode = false,
+  responseSchema?: object
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set in environment");
@@ -25,6 +26,7 @@ export async function callGemini(
       generationConfig: {
         temperature,
         ...(jsonMode && { response_mime_type: "application/json" }),
+        ...(responseSchema && { response_schema: responseSchema }),
       },
     }),
   });
@@ -43,6 +45,32 @@ export async function callGemini(
   if (!text) throw new Error("Gemini returned empty response");
   return text.trim();
 }
+
+// Structural schema for question generation.
+// Gemini uses UPPERCASE type names. This prevents field-name hallucination
+// (e.g. {"D":"text","key":"C"} instead of {"key":"C","text":"..."}).
+const QUESTION_SCHEMA = {
+  type: "ARRAY",
+  items: {
+    type: "OBJECT",
+    properties: {
+      question_text:  { type: "STRING" },
+      correct_answer: { type: "STRING" },
+      explanation:    { type: "STRING" },
+      section:        { type: "STRING" },
+      options: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            key:  { type: "STRING" },
+            text: { type: "STRING" },
+          },
+        },
+      },
+    },
+  },
+};
 
 export async function generateMockQuestions(
   examName: string,
@@ -80,8 +108,9 @@ Requirements:
 - Mix easy, medium, and hard difficulty
 - correct_answer must be exactly one of: "A", "B", "C", "D"`;
 
-  // jsonMode = true forces Gemini to emit valid JSON — eliminates all parse errors
-  const text = await callGemini(prompt, 0.7, true);
+  // jsonMode + responseSchema: Gemini is constrained to the exact field names.
+  // Prevents {"D":"text","key":"C"} hallucination on option objects.
+  const text = await callGemini(prompt, 0.7, true, QUESTION_SCHEMA);
 
   const parsed = JSON.parse(text);
   if (!Array.isArray(parsed) || parsed.length === 0) {

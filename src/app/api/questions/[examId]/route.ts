@@ -21,6 +21,36 @@ function isFallbackQuestion(q: { question_text?: string }): boolean {
   );
 }
 
+// Repair any option whose text was stored under the wrong key (Gemini hallucination).
+// e.g. {"D":"Developer Center","key":"C"} → {"key":"C","text":"Developer Center"}
+function normalizeOptions(
+  options: Array<Record<string, string>>
+): { key: string; text: string }[] {
+  return options.map((opt) => {
+    if (opt.key && opt.text) return { key: opt.key, text: opt.text };
+    const key = opt.key ?? "";
+    const text =
+      opt.text ??
+      Object.entries(opt)
+        .filter(([k]) => k !== "key")
+        .map(([, v]) => v)
+        .find(Boolean) ??
+      "";
+    return { key, text };
+  });
+}
+
+function normalizeQuestions(
+  questions: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  return questions.map((q) => ({
+    ...q,
+    options: normalizeOptions(
+      (q.options as Array<Record<string, string>>) ?? []
+    ),
+  }));
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ examId: string }> }
@@ -62,7 +92,10 @@ export async function GET(
         question_count: questions.length,
       });
       reqTimer.done("request complete", { exam_id: examId, source: "cache" });
-      return NextResponse.json({ questions, source: "cache" });
+      return NextResponse.json({
+        questions: normalizeQuestions(questions as Array<Record<string, unknown>>),
+        source: "cache",
+      });
     }
 
     if (questions?.length) {
@@ -128,6 +161,7 @@ export async function GET(
       }
     });
 
+  const normalized = normalizeQuestions(questions as Array<Record<string, unknown>>);
   reqTimer.done("request complete", { exam_id: examId, source: "gemini" });
-  return NextResponse.json({ questions, source: "gemini" });
+  return NextResponse.json({ questions: normalized, source: "gemini" });
 }
